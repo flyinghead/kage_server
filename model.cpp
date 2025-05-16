@@ -19,7 +19,7 @@
 #include "model.h"
 #include "discord.h"
 #include "log.h"
-#include <optional>
+#include <algorithm>
 
 void Player::setAlive() {
 	lastTime = Clock::now();
@@ -211,6 +211,7 @@ void Server::read()
 				read();
 				return;
 			}
+			dump(recvbuf.data(), len);
 			//printf("UdpSocket: received %d bytes to port %d from %s:%d\n", (int)len,
 			//		socket.local_endpoint().port(), source.address().to_string().c_str(), source.port());
 			if (len < 0x14)
@@ -981,6 +982,16 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		send(packet, *player);
 }
 
+void LobbyServer::dump(const uint8_t* data, size_t len)
+{
+	auto it = players.find(source);
+	if (it == players.end())
+		return;
+	Player *player = it->second;
+	if (player->getRoom() != nullptr)
+		player->getRoom()->writeNetdump(data, len, source);
+}
+
 void Room::setAttributes(uint32_t attributes)
 {
 	INFO_LOG(lobby.getServer().game, "Room %s status set to %08x", name.c_str(), attributes);
@@ -1130,6 +1141,35 @@ void Room::reset()
 	for (auto& [status, data] : results)
 		status = false;
 	frameNum = 0;
+}
+
+void Room::openNetdump()
+{
+	time_t now = time(nullptr);
+	struct tm tm = *localtime(&now);
+
+	char date[16];
+	sprintf(date, "%02d_%02d-%02d-%02d", tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+	std::string fname = std::string(date) + "_" + name + ".dmp";
+	std::replace(fname.begin(), fname.end(), '/', '_');
+	netdump = fopen(fname.c_str(), "w");
+	if (netdump == nullptr)
+		WARN_LOG(lobby.getServer().game, "Can't open netdump file %s: error %d", fname.c_str(), errno);
+}
+
+void Room::writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const
+{
+	if (netdump == nullptr)
+		return;
+	time_t now = std::chrono::time_point_cast<std::chrono::milliseconds>(Clock::now()).time_since_epoch().count();
+	fwrite(&now, sizeof(now), 1, netdump);
+	std::array<uint8_t, 4> addr = endpoint.address().to_v4().to_bytes();
+	fwrite(addr.data(), addr.size(), 1, netdump);
+	uint16_t port = endpoint.port();
+	fwrite(&port, 2, 1, netdump);
+	fwrite(&len, 4, 1, netdump);
+	fwrite(data, 1, len, netdump);
 }
 
 void Lobby::addPlayer(Player *player)

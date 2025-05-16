@@ -120,6 +120,10 @@ public:
 		: lobby(lobby), id(id), name(name), attributes(attributes), owner(owner) {
 		assert(name.length() <= 16);
 		addPlayer(owner);
+		openNetdump();
+	}
+	~Room() {
+		closeNetdump();
 	}
 
 	uint32_t getId() const {
@@ -176,8 +180,16 @@ public:
 		return frameNum++;
 	}
 
+	void writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const;
+
 private:
 	void reset();
+	void openNetdump();
+
+	void closeNetdump() {
+		if (netdump != nullptr)
+			fclose(netdump);
+	}
 
 	Lobby& lobby;
 	const uint32_t id;
@@ -192,6 +204,7 @@ private:
 	std::vector<bool> ready;
 	std::vector<gamedata_t> gameData;
 	std::vector<std::pair<bool, result_t>> results;
+	FILE *netdump = nullptr;
 };
 
 class Lobby
@@ -266,6 +279,8 @@ public:
 protected:
 	void read();
 	virtual void handlePacket(const uint8_t *data, size_t len) = 0;
+	virtual void dump(const uint8_t* data, size_t len) {
+	}
 
 	asio::ip::udp::socket socket;
 	std::array<uint8_t, 1510> recvbuf;
@@ -298,6 +313,9 @@ public:
 	void sendToAll(Packet& packet, const std::vector<Player *>& players, Player *except = nullptr);
 
 	const Game game;
+
+protected:
+	void dump(const uint8_t* data, size_t len) override;
 
 private:
 	void handlePacket(const uint8_t *data, size_t len) override;
