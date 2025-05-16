@@ -18,6 +18,7 @@
 */
 #include "model.h"
 #include "discord.h"
+#include "log.h"
 #include <optional>
 
 void Player::setAlive() {
@@ -206,7 +207,7 @@ void Server::read()
 		[this](const std::error_code& ec, size_t len)
 		{
 			if (ec) {
-				fprintf(stderr, "Error: receive_from failed: %s\n", ec.message().c_str());
+				ERROR_LOG(Game::None, "receive_from failed: %s", ec.message().c_str());
 				read();
 				return;
 			}
@@ -214,7 +215,7 @@ void Server::read()
 			//		socket.local_endpoint().port(), source.address().to_string().c_str(), source.port());
 			if (len < 0x14)
 			{
-				fprintf(stderr, "Error: datagram too small: %zd bytes", len);
+				ERROR_LOG(Game::None, "datagram too small: %zd bytes", len);
 				read();
 				return;
 			}
@@ -223,12 +224,12 @@ void Server::read()
 			do {
 				uint16_t pktSize = read16(recvbuf.data(), idx) & 0x3ff;
 				if (pktSize < 0x10) {
-					fprintf(stderr, "Error: packet too small: %d bytes", pktSize);
+					ERROR_LOG(Game::None, "packet too small: %d bytes", pktSize);
 					break;
 				}
 				// Ack packets have length 0x14 for some reason...
 				if (pktSize > len - idx && recvbuf[idx + 3] != Packet::REQ_NOP) {
-					fprintf(stderr, "Error: packet truncated: %d bytes > %zd bytes\n", pktSize, len - idx);
+					ERROR_LOG(Game::None, "packet truncated: %d bytes > %zd bytes", pktSize, len - idx);
 					break;
 				}
 				handlePacket(&recvbuf[idx], pktSize);
@@ -248,7 +249,7 @@ void BootstrapServer::start()
 
 void BootstrapServer::handlePacket(const uint8_t *data, size_t len)
 {
-	printf("Bootstrap: Packet: flags/size %02x %02x command %02x %02x\n", data[0], data[1], data[2], data[3]);
+	DEBUG_LOG(Game::None, "Bootstrap: Packet: flags/size %02x %02x command %02x %02x", data[0], data[1], data[2], data[3]);
 	Packet packet;
 	switch (data[3])
 	{
@@ -334,7 +335,7 @@ void BootstrapServer::handlePacket(const uint8_t *data, size_t len)
 		break;
 
 	default:
-		printf("Bootstrap: Unhandled msg type %x\n", data[3]);
+		ERROR_LOG(Game::None, "Bootstrap: Unhandled msg type %x", data[3]);
 		break;
 	}
 }
@@ -358,7 +359,7 @@ void LobbyServer::startTimer()
 		for (auto& [ep, player] : players)
 		{
 			if (player->timedOut()) {
-				printf("Player %s has timed out\n", player->getName().c_str());
+				INFO_LOG(game, "Player %s has timed out", player->getName().c_str());
 				timeouts.push_back(player);
 			}
 		}
@@ -371,15 +372,15 @@ void LobbyServer::startTimer()
 void LobbyServer::addPlayer(Player *player)
 {
 	auto it = players.find(player->getEndpoint());
-	if (it != players.end()) {
-		fprintf(stderr, "Player %s [%x] from %s:%d already in lobby server %s\n",
+	if (it != players.end())
+	{
+		WARN_LOG(game, "Player %s [%x] from %s:%d already in lobby server",
 				it->second->getName().c_str(), it->second->getId(),
-				player->getEndpoint().address().to_string().c_str(), player->getEndpoint().port(),
-				getGameName(game));
+				player->getEndpoint().address().to_string().c_str(), player->getEndpoint().port());
 		removePlayer(it->second);
 	}
-	printf("Player %s [%x] joined lobby server %s from %s:%d\n",
-			player->getName().c_str(), player->getId(), getGameName(game),
+	INFO_LOG(game, "Player %s [%x] joined lobby server from %s:%d",
+			player->getName().c_str(), player->getId(),
 			player->getEndpoint().address().to_string().c_str(), player->getEndpoint().port());
 	players[player->getEndpoint()] = player;
 }
@@ -389,7 +390,7 @@ void LobbyServer::removePlayer(Player *player)
 	if (player->getLobby() != nullptr)
 		player->getLobby()->removePlayer(player);
 	players.erase(player->getEndpoint());
-	printf("Player %s [%x] left lobby server %s\n", player->getName().c_str(), player->getId(), getGameName(game));
+	INFO_LOG(game, "Player %s [%x] left lobby server", player->getName().c_str(), player->getId());
 	delete player;
 }
 
@@ -428,7 +429,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 {
 	auto it = players.find(source);
 	if (it == players.end()) {
-		fprintf(stderr, "Packet from unknown endpoint %s:%d ignored\n", source.address().to_string().c_str(), source.port());
+		WARN_LOG(game, "Packet from unknown endpoint %s:%d ignored", source.address().to_string().c_str(), source.port());
 		return;
 	}
 	Player *player = it->second;
@@ -540,7 +541,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				Lobby *lobby = getLobby(id);
 				if (lobby == nullptr) {
 					packet.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
-					fprintf(stderr, "%s join lobby failed: unknown lobby id %x\n", player->getName().c_str(), id);
+					WARN_LOG(game, "%s join lobby failed: unknown lobby id %x", player->getName().c_str(), id);
 				}
 				else
 				{
@@ -568,7 +569,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				Room *room = lobby == nullptr ? nullptr : lobby->getRoom(id);
 				if (room == nullptr) {
 					packet.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
-					fprintf(stderr, "%s join room failed: unknown room id %x (lobby %p)\n", player->getName().c_str(), id, lobby);
+					WARN_LOG(game, "%s join room failed: unknown room id %x (lobby %p)", player->getName().c_str(), id, lobby);
 				}
 				else
 				{
@@ -738,7 +739,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 
 			case TagCmd::START_OK:
 				{
-					printf("tag: START OK\n");
+					INFO_LOG(game, "tag: START OK");
 					packet.init(Packet::REQ_NOP);
 					packet.ack(read32(data, 8));
 					send(packet, *player);
@@ -747,7 +748,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					if (room != nullptr && room->getPlayerCount() >= 2)
 					{
 						// start ok
-						printf("Sending START_OK to owner\n");
+						INFO_LOG(game, "Sending START_OK to owner");
 						packet.init(Packet::RSP_TAG_CMD);
 						packet.writeData(0u);	// list: count [int ...]
 						packet.writeData(tag.full);
@@ -759,7 +760,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 
 			case TagCmd::SYS:
 				{
-					printf("tag: SYS from %s\n", player->getName().c_str());
+					INFO_LOG(game, "tag: SYS from %s", player->getName().c_str());
 					packet.init(Packet::RSP_TAG_CMD);
 					packet.ack(read32(data, 8));
 					packet.flags |= Packet::FLAG_RUDP;
@@ -777,7 +778,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 						if (room->setSysData(player, sysdata))
 						{
 							// send SYS2
-							printf("%s: Sending SYS2 to all players\n", room->getName().c_str());
+							INFO_LOG(game, "%s: Sending SYS2 to all players", room->getName().c_str());
 							std::vector<Room::sysdata_t> sysdata  = room->getSysData();
 							Packet sys2;
 							sys2.init(Packet::RSP_TAG_CMD);
@@ -797,7 +798,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 
 			case TagCmd::READY:
 				{
-					printf("tag: READY from %s\n", player->getName().c_str());
+					INFO_LOG(game, "tag: READY from %s", player->getName().c_str());
 					packet.init(Packet::REQ_NOP);
 					packet.ack(read32(data, 8));
 					send(packet, *player);
@@ -806,7 +807,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					if (room != nullptr && room->setReady(player))
 					{
 						// send GAME_START
-						printf("%s: Sending GAME_START to all players\n", room->getName().c_str());
+						INFO_LOG(game, "%s: Sending GAME_START to all players", room->getName().c_str());
 						Packet gameStart;
 						gameStart.init(Packet::REQ_CHAT);
 						gameStart.flags |= Packet::FLAG_RUDP;
@@ -853,7 +854,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 
 			case TagCmd::RESULT:
 				{
-					printf("tag: RESULT from %s\n", player->getName().c_str());
+					INFO_LOG(game, "tag: RESULT from %s", player->getName().c_str());
 					packet.init(Packet::REQ_NOP);
 					packet.ack(read32(data, 8));
 					send(packet, *player);
@@ -862,6 +863,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					if (room != nullptr && room->setResult(player, &data[0x12]))
 					{
 						// Send RESULT2
+						INFO_LOG(game, "%s: Sending RESULT2 to all players", room->getName().c_str());
 						std::vector<Room::result_t> results  = room->getResults();
 						Packet result2;
 						result2.init(Packet::REQ_CHAT);
@@ -877,16 +879,16 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				}
 
 			case TagCmd::RESET:
-				printf("tag: RESET from %s\n", player->getName().c_str());
+				WARN_LOG(game, "tag: RESET from %s", player->getName().c_str());
 				// TODO send game_over to all players?
 				return;
 
 			case TagCmd::TIME_OUT:
-				printf("tag: TIME OUT from %s\n", player->getName().c_str());
+				WARN_LOG(game, "tag: TIME OUT from %s", player->getName().c_str());
 				return;
 
 			default:
-				fprintf(stderr, "Unhandled tag command: %x (tag %04x)\n", tag.command, tag.full);
+				ERROR_LOG(game, "Unhandled tag command: %x (tag %04x)", tag.command, tag.full);
 				return;
 			}
 			break;
@@ -930,7 +932,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				if (cmd == 0x3804)	// ping
 				{
 					//bomberman
-					printf("chat(F) ping %04x %08x %x\n", read16(data, 0x12), read32(data, 0x14), data[0x18]);
+					INFO_LOG(game, "chat(F) ping %04x %08x %x", read16(data, 0x12), read32(data, 0x14), data[0x18]);
 					packet.init(Packet::REQ_CHAT);
 					packet.writeData((uint16_t)0x3804u);
 					packet.writeData((uint16_t)0x7800u);
@@ -938,7 +940,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					packet.writeData((uint8_t)0);
 				}
 				else {
-					printf("unreliable chat(F) ignored\n");
+					INFO_LOG(game, "unreliable chat(F) ignored");
 				}
 			}
 			break;
@@ -972,11 +974,20 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		return;
 
 	default:
-		printf("Lobby: Unhandled msg type %x\n", data[3]);
+		ERROR_LOG(game, "Lobby: Unhandled msg type %x", data[3]);
 		return;
 	}
 	if (player != nullptr)
 		send(packet, *player);
+}
+
+void Room::setAttributes(uint32_t attributes)
+{
+	INFO_LOG(lobby.getServer().game, "Room %s status set to %08x", name.c_str(), attributes);
+	if ((attributes & 0x80000000) != 0 && (this->attributes & 0x80000000) == 0)
+		// reset when starting a game
+		reset();
+	this->attributes = attributes;
 }
 
 void Room::addPlayer(Player *player)
@@ -985,7 +996,7 @@ void Room::addPlayer(Player *player)
 		return;
 	players.push_back(player);
 	player->setRoom(this);
-	printf("%s: %s joined room %s\n", getGameName(lobby.getServer().game), player->getName().c_str(), name.c_str());
+	INFO_LOG(lobby.getServer().game, "%s joined room %s", player->getName().c_str(), name.c_str());
 }
 
 bool Room::removePlayer(Player *player)
@@ -993,7 +1004,7 @@ bool Room::removePlayer(Player *player)
 	player->setRoom(nullptr);
 	for (auto it = players.begin(); it != players.end(); ++it)
 		if (player == *it) {
-			printf("%s: %s left room %s\n", getGameName(lobby.getServer().game), player->getName().c_str(), name.c_str());
+			INFO_LOG(lobby.getServer().game, "%s left room %s", player->getName().c_str(), name.c_str());
 			players.erase(it);
 			break;
 		}
@@ -1017,7 +1028,7 @@ bool Room::removePlayer(Player *player)
 		tag.command = TagCmd::OWNER;
 		packet.writeData(tag.full);
 		lobby.getServer().send(packet, *owner);
-		printf("%s: %s is the new owner of %s\n", getGameName(lobby.getServer().game), owner->getName().c_str(), name.c_str());
+		INFO_LOG(lobby.getServer().game, "%s is the new owner of %s", owner->getName().c_str(), name.c_str());
 	}
 	return false;
 }
@@ -1036,7 +1047,7 @@ bool Room::setSysData(const Player *player, const sysdata_t& sysdata)
 	sysData.resize(players.size());
 	int i = getPlayerIndex(player);
 	if (i < 0) {
-		fprintf(stderr, "setSysData: player not found in room\n");
+		WARN_LOG(lobby.getServer().game, "setSysData: player not found in room");
 		return false;
 	}
 	sysData[i] = std::make_pair(true, sysdata);
@@ -1051,7 +1062,7 @@ bool Room::setReady(const Player *player)
 	ready.resize(players.size());
 	int i = getPlayerIndex(player);
 	if (i < 0) {
-		fprintf(stderr, "setReady: player not found in room\n");
+		WARN_LOG(lobby.getServer().game, "setReady: player not found in room");
 		return false;
 	}
 	ready[i] = true;
@@ -1128,7 +1139,7 @@ void Lobby::addPlayer(Player *player)
 			return;
 	players.push_back(player);
 	player->setLobby(this);
-	printf("%s: %s joined lobby %s\n", getGameName(server.game), player->getName().c_str(), name.c_str());
+	INFO_LOG(server.game, "%s joined lobby %s", player->getName().c_str(), name.c_str());
 	// Discord presence
 	std::vector<std::string> names;
 	names.reserve(players.size());
@@ -1148,7 +1159,7 @@ void Lobby::removePlayer(Player *player)
 	for (auto it = players.begin(); it != players.end(); ++it)
 		if (player == *it)
 		{
-			printf("%s: %s left lobby %s\n", getGameName(server.game), player->getName().c_str(), name.c_str());
+			INFO_LOG(server.game, "%s left lobby %s", player->getName().c_str(), name.c_str());
 			player->setLobby(nullptr);
 			players.erase(it);
 			break;

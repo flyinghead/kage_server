@@ -19,6 +19,7 @@
 #include "propa_rank.h"
 #include "model.h"
 #include "discord.h"
+#include "log.h"
 #include "asio.h"
 #include <map>
 #include <fstream>
@@ -81,7 +82,7 @@ static void loadConfig(const std::string& path)
 {
 	std::filebuf fb;
 	if (!fb.open(path, std::ios::in)) {
-		fprintf(stderr, "Warning: config file %s not found\n", path.c_str());
+		WARN_LOG(Game::None, "config file %s not found", path.c_str());
 		return;
 	}
 
@@ -95,7 +96,7 @@ static void loadConfig(const std::string& path)
 		if (pos != std::string::npos)
 			Config[line.substr(0, pos)] = line.substr(pos + 1);
 		else
-			fprintf(stderr, "Error: config file syntax error: %s\n", line.c_str());
+			ERROR_LOG(Game::None, "config file syntax error: %s", line.c_str());
 	}
 	if (Config.count("DISCORD_WEBHOOK") > 0)
 		setDiscordWebhook(Config["DISCORD_WEBHOOK"]);
@@ -109,7 +110,7 @@ int main(int argc, char *argv[])
 	asio::signal_set signals(io_context, SIGINT, SIGTERM);
 	signals.async_wait([&io_context](const std::error_code& ec, int signalNum) {
 		if (!ec) {
-			fprintf(stderr, "Caught signal %d. Exiting\n", signalNum);
+			ERROR_LOG(Game::None, "Caught signal %d. Exiting", signalNum);
 			io_context.stop();
 		}
 	});
@@ -119,9 +120,13 @@ int main(int argc, char *argv[])
 	server.start();
 	RankAcceptor rankServer(io_context);
 	rankServer.start();
-	printf("Kage server started\n");
-	io_context.run();
-	printf("Kage server stopped\n");
+	NOTICE_LOG(Game::None, "Kage server started");
+	try {
+		io_context.run();
+	} catch (const std::exception& e) {
+		ERROR_LOG(Game::None, "Uncaught exception: %s", e.what());
+	}
+	NOTICE_LOG(Game::None, "Kage server stopped");
 
 	return 0;
 }

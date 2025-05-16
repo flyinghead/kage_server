@@ -26,6 +26,7 @@
 
 enum class Game
 {
+	None = -1,
 	Bomberman = 0,
 	Outtrigger = 1,
 	PropellerA = 2,
@@ -134,12 +135,7 @@ public:
 	uint32_t getAttributes() const {
 		return attributes;
 	}
-	void setAttributes(uint32_t attributes) {
-		printf("Room %s status set to %08x\n", name.c_str(), attributes);
-		this->attributes = attributes;
-		if (attributes & 0x80000000)
-			reset();
-	}
+	void setAttributes(uint32_t attributes);
 
 	uint32_t getMaxPlayers() const {
 		return maxPlayers;

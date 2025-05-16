@@ -17,6 +17,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 #pragma once
+#include "log.h"
 #include "shared_this.h"
 #include "asio.h"
 #include <array>
@@ -61,9 +62,9 @@ private:
 	void onSent(const std::error_code& ec, size_t len)
 	{
 		if (ec)
-			fprintf(stderr, "Send error: %s\n", ec.message().c_str());
+			ERROR_LOG(Game::PropellerA, "Send error: %s", ec.message().c_str());
 		else
-			printf("sent %zd bytes\n", len);
+			DEBUG_LOG(Game::PropellerA, "sent %zd bytes", len);
 		sendIdx = 0;
 		sending = false;
 	}
@@ -106,7 +107,7 @@ public:
 		acceptor.async_accept(newConnection->getSocket(),
 			[this, newConnection](const std::error_code& error) {
 				if (!error) {
-					printf("New connection from %s\n", newConnection->getSocket().remote_endpoint().address().to_string().c_str());
+					INFO_LOG(Game::PropellerA, "New connection from %s", newConnection->getSocket().remote_endpoint().address().to_string().c_str());
 					newConnection->receive();
 				}
 				start();
