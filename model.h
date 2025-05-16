@@ -22,6 +22,7 @@
 #include <string>
 #include <array>
 #include <map>
+#include <chrono>
 
 enum class Game
 {
@@ -46,6 +47,10 @@ class Room;
 class Lobby;
 class LobbyServer;
 class Packet;
+
+using Clock = std::chrono::steady_clock;
+using time_point = std::chrono::time_point<Clock>;
+using namespace std::chrono_literals;
 
 class Player
 {
@@ -91,6 +96,9 @@ public:
 		return relSeq++;
 	}
 
+	void setAlive();
+	bool timedOut() const;
+
 private:
 	LobbyServer& server;
 	uint32_t id = 0;
@@ -101,6 +109,7 @@ private:
 	Lobby *lobby = nullptr;
 	Room *room = nullptr;
 	uint32_t relSeq = 0; // must start at 0
+	time_point lastTime;
 };
 
 class Room

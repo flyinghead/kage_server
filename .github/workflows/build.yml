@@ -1,0 +1,27 @@
+name: kageserver build
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: kageserver
+    runs-on: ubuntu-latest
+    container: debian:11
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get -y install build-essential git libcurl4-gnutls-dev libasio-dev
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Build
+        run: make
+
+      - uses: actions/upload-artifact@v4
+        with:
+          path: kageserver

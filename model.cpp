@@ -20,6 +20,17 @@
 #include "discord.h"
 #include <optional>
 
+void Player::setAlive() {
+	lastTime = Clock::now();
+}
+
+bool Player::timedOut() const
+{
+	if (room == nullptr)
+		return false;
+	return Clock::now() - lastTime >= 30s;
+}
+
 static uint16_t read16(const uint8_t *p, unsigned offset) {
 	return ntohs(*(const uint16_t *)&p[offset]);
 }
@@ -319,31 +330,25 @@ LobbyServer::LobbyServer(Game game, uint16_t port, asio::io_context& io_context)
 {
 	lobbies.reserve(10);
 	addLobby("ShuMania");
-//	startTimer();
+	startTimer();
 }
 
 void LobbyServer::startTimer()
 {
-	timer.expires_at(asio::chrono::steady_clock::now() + asio::chrono::seconds(3));
+	timer.expires_at(Clock::now() + 30s);
 	timer.async_wait([this](const std::error_code& ec) {
 		if (ec)
 			return;
+		std::vector<Player *> timeouts;
 		for (auto& [ep, player] : players)
 		{
-			if (player->getRoom() != nullptr)
-			{
-				Packet packet;
-				packet.init(Packet::RSP_TAG_CMD);
-				packet.writeData(0u);
-				TagCmd tag;
-				tag.command = TagCmd::ECHO;
-				packet.writeData(tag.full);
-				packet.writeData((uint16_t)1);
-				size_t pktsize = packet.finalize(0, player->getId());
-				std::error_code ec2;
-				socket.send_to(asio::buffer(packet.data, pktsize), player->getEndpoint(), 0, ec2);
+			if (player->timedOut()) {
+				printf("Player %s has timed out\n", player->getName().c_str());
+				timeouts.push_back(player);
 			}
 		}
+		for (Player *player : timeouts)
+			removePlayer(player);
 		startTimer();
 	});
 }
@@ -411,6 +416,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		return;
 	}
 	Player *player = it->second;
+	player->setAlive();
 	//printf("Lobby: %s packet: flags/size %02x %02x command %02x %02x\n", player->getName().c_str(), data[0], data[1], data[2], data[3]);
 	Packet packet;
 	switch (data[3])

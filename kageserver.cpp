@@ -18,7 +18,13 @@
 */
 #include "propa_rank.h"
 #include "model.h"
+#include "discord.h"
 #include "asio.h"
+#include <map>
+#include <fstream>
+#include <sstream>
+
+static std::map<std::string, std::string> Config;
 
 // propeller arena auth server key: "Propeller Arena Aviation Battle e4b045c70cef431403ab08b"
 // console id: c7 45 b0 e4 14 43                                             ????    TCNT0!!
@@ -71,6 +77,30 @@ static void testPropA()
 }
 */
 
+static void loadConfig(const std::string& path)
+{
+	std::filebuf fb;
+	if (!fb.open(path, std::ios::in)) {
+		fprintf(stderr, "Warning: config file %s not found\n", path.c_str());
+		return;
+	}
+
+	std::istream istream(&fb);
+	std::string line;
+	while (std::getline(istream, line))
+	{
+		if (line.empty() || line[0] == '#')
+			continue;
+		auto pos = line.find_first_of("=:");
+		if (pos != std::string::npos)
+			Config[line.substr(0, pos)] = line.substr(pos + 1);
+		else
+			fprintf(stderr, "Error: config file syntax error: %s\n", line.c_str());
+	}
+	if (Config.count("DISCORD_WEBHOOK") > 0)
+		setDiscordWebhook(Config["DISCORD_WEBHOOK"]);
+}
+
 int main(int argc, char *argv[])
 {
 	setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
@@ -83,6 +113,8 @@ int main(int argc, char *argv[])
 			io_context.stop();
 		}
 	});
+	loadConfig(argc >= 2 ? argv[1] : "kage.cfg");
+
 	BootstrapServer server(9090, io_context);
 	server.start();
 	RankAcceptor rankServer(io_context);
