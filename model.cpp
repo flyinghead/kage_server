@@ -74,18 +74,22 @@ public:
 	};
 	enum {
 		FLAG_RELAY = 0x400,
+		FLAG_CONTINUE = 0x800,
 		FLAG_LOBBY = 0x1000,
 		FLAG_UNKNOWN = 0x2000,
 		FLAG_ACK = 0x4000,
 		FLAG_RUDP = 0x8000,
 	};
-	uint8_t data[0x400];
+
+	uint8_t data[0x800];
 	uint16_t size = 0x10;
+	uint16_t startOffset = 0;
 	uint16_t flags = 0;
 	uint8_t type = 0;
 
 	void init(uint8_t type)
 	{
+		startOffset = 0;
 		size = 0x10;
 		this->type = type;
 		memset(data, 0, sizeof(data));
@@ -128,19 +132,30 @@ public:
 
 	void ack(uint32_t seq) {
 		flags |= Packet::FLAG_ACK;
-		write32(data, 0xc, seq);
+		write32(data, startOffset + 0xc, seq);
 	}
 
 	size_t finalize(int sequence, uint32_t userId)
 	{
-		if (size > 0x3ff)
+		const uint16_t chunkSize = size - startOffset;
+		if (chunkSize > 0x3ff)
 			throw std::runtime_error("Packet too big");
-		write16(data, 0, flags | size);
-		data[3] = type;
-		write32(data, 4, userId);
-		write32(data, 8, sequence);
+		write16(data, startOffset, flags | chunkSize);
+		data[startOffset + 3] = type;
+		write32(data, startOffset + 4, userId);
+		write32(data, startOffset + 8, sequence);
 		memcpy(&data[size], &ServerTag, sizeof(ServerTag));
 		return size + sizeof(ServerTag);
+	}
+
+	void append(uint8_t type)
+	{
+		if (startOffset == 0)
+			write16(data, 0, read16(data, 0) | FLAG_CONTINUE);
+		startOffset = size;
+		size += 0x10;
+		this->type = type;
+		flags = FLAG_UNKNOWN;
 	}
 
 	static constexpr uint32_t ServerTag = 0x006647BA;
@@ -396,6 +411,7 @@ void LobbyServer::sendToAll(Packet& packet, const std::vector<Player *>& players
 		// Special handling for rudp::SYS2
 		if (packet.type == Packet::RSP_TAG_CMD)
 		{
+			// FIXME this won't work for continuation packets
 			TagCmd tag(read16(packet.data, 0x14));
 			if (tag.command == TagCmd::SYS2) {
 				// notify each player of his position in the game
@@ -569,10 +585,10 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					packet.respOK(Packet::REQ_JOIN_LOBBY_ROOM);
 					packet.writeData(room->getId());
 					packet.ack(read32(data, 8));
-					send(packet, *player);
+					packet.finalize(unrelSeq++, player->getId());
 
 					// Push room status to new player
-					packet.init(Packet::REQ_CHG_ROOM_STATUS);
+					packet.append(Packet::REQ_CHG_ROOM_STATUS);
 					packet.writeData(room->getId());
 					packet.writeData("STAT", 4);
 					packet.writeData(room->getAttributes());
@@ -653,7 +669,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				attributes |= 1;	// server ready?
 				Room *room = player->getLobby()->addRoom(name, attributes, player);
 				room->setMaxPlayers(maxPlayers);
-				/* This doesn't work. Should it be sent to other players in lobby?
+				/* Should it be sent to other players in lobby?
 				packet.init(Packet::REQ_CREATE_ROOM);
 				packet.ack(read32(data, 8));
 				packet.writeData(name.c_str(), 16);
@@ -664,26 +680,16 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				packet.writeData(room->getId());
 				*/
 
-				// FIXME hack to send both packets in one send... propeller arena apparently needs it
 				packet.respOK(Packet::REQ_CREATE_ROOM);
-				packet.flags |= 0x800;
 				packet.writeData(room->getId());
 				packet.ack(read32(data, 8));
-				uint8_t buf[512];
 				packet.finalize(unrelSeq++, player->getId());
-				memcpy(buf, packet.data, packet.size);
-				unsigned idx = packet.size;
 
-				packet.init(Packet::REQ_CHG_ROOM_STATUS);
+				packet.append(Packet::REQ_CHG_ROOM_STATUS);
 				packet.writeData(room->getId());
 				packet.writeData("STAT", 4);
 				packet.writeData(attributes);
-				packet.finalize(unrelSeq++, player->getId());
-				memcpy(buf + idx, packet.data, packet.size + 4);
-				idx += packet.size + 4;
-				std::error_code ec2;
-				socket.send_to(asio::buffer(buf, idx), player->getEndpoint(), 0, ec2);
-				return;
+
 			}
 			break;
 		}
@@ -891,28 +897,32 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			uint16_t flags = read16(data, 0);
 			if (flags & Packet::FLAG_RUDP)
 			{
-				packet.respOK(Packet::REQ_CHAT);
-				packet.ack(read32(data, 8));
-				packet.flags |= flags & Packet::FLAG_LOBBY;
+				// Broadcast to other players in the lobby/room
+				Packet relay;
+				relay.init(Packet::REQ_CHAT);
+				relay.flags |= (flags & Packet::FLAG_LOBBY) | Packet::FLAG_RELAY;
+				relay.writeData(&data[0x10], (flags & 0x3ff) - 0x10);
+				if (flags & Packet::FLAG_LOBBY)
 				{
-					// Broadcast to other players in the lobby/room
-					Packet relay;
-					relay.init(Packet::REQ_CHAT);
-					relay.flags |= (flags & Packet::FLAG_LOBBY) | Packet::FLAG_RELAY;
-					relay.writeData(&data[0x10], (flags & 0x3ff) - 0x10);
-					if (flags & Packet::FLAG_LOBBY)
-					{
-						Lobby *lobby = player->getLobby();
-						if (lobby != nullptr)
-							sendToAll(relay, lobby->getPlayers(), player);
-					}
-					else
-					{
-						Room *room = player->getRoom();
-						if (room != nullptr)
-							sendToAll(relay, room->getPlayers(), player);
-					}
+					Lobby *lobby = player->getLobby();
+					if (lobby != nullptr)
+						sendToAll(relay, lobby->getPlayers(), player);
 				}
+				else
+				{
+					Room *room = player->getRoom();
+					if (room != nullptr)
+						sendToAll(relay, room->getPlayers(), player);
+				}
+
+				uint32_t seq = read32(data, 8);
+				// TODO correct?
+				if (seq == 0)
+					// don't ack continued chat pkt
+					return;
+				packet.respOK(Packet::REQ_CHAT);
+				packet.ack(seq);
+				packet.flags |= flags & Packet::FLAG_LOBBY;
 			}
 			else
 			{
@@ -1007,6 +1017,7 @@ bool Room::removePlayer(Player *player)
 		tag.command = TagCmd::OWNER;
 		packet.writeData(tag.full);
 		lobby.getServer().send(packet, *owner);
+		printf("%s: %s is the new owner of %s\n", getGameName(lobby.getServer().game), owner->getName().c_str(), name.c_str());
 	}
 	return false;
 }
