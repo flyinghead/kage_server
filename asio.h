@@ -1,6 +1,8 @@
 #pragma once
 #include <asio.hpp>
 
+#undef ECHO
+
 #if ASIO_VERSION < 102900
 namespace asio::placeholders
 {

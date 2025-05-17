@@ -1,8 +1,8 @@
 CFLAGS = -g -Wall -O3 # -fsanitize=address -static-libasan
 CXXFLAGS = $(CFLAGS) -std=c++17
-DEPS = asio.h blowfish.h model.h propa_rank.h discord.h log.h
+DEPS = asio.h blowfish.h model.h propa_rank.h discord.h log.h kage.h
 
-all: kageserver
+all: kageserver ot_dissect
 
 %.o: %.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
@@ -13,5 +13,8 @@ all: kageserver
 kageserver: kageserver.o blowfish.o model.o discord.o log.o
 	$(CXX) $(CXXFLAGS) -o $@ kageserver.o blowfish.o model.o discord.o log.o -lpthread -lcurl
 
+ot_dissect: ot_dissect.o
+	$(CXX) $(CXXFLAGS) -o $@ ot_dissect.o
+
 clean:
-	rm -f *.o kageserver
+	rm -f *.o kageserver ot_dissect

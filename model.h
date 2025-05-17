@@ -17,31 +17,13 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 #pragma once
+#include "kage.h"
 #include "asio.h"
 #include <stdint.h>
 #include <string>
 #include <array>
 #include <map>
 #include <chrono>
-
-enum class Game
-{
-	None = -1,
-	Bomberman = 0,
-	Outtrigger = 1,
-	PropellerA = 2,
-};
-
-inline static const char *getGameName(Game game)
-{
-	switch (game)
-	{
-	case Game::Bomberman: return "Bomberman";
-	case Game::Outtrigger: return "Outtrigger";
-	case Game::PropellerA: return "Propeller Arena";
-	default: return "(unknown)";
-	}
-}
 
 class Player;
 class Room;
@@ -51,7 +33,6 @@ class Packet;
 
 using Clock = std::chrono::steady_clock;
 using time_point = std::chrono::time_point<Clock>;
-using namespace std::chrono_literals;
 
 class Player
 {
@@ -117,14 +98,13 @@ class Room
 {
 public:
 	Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner)
-		: lobby(lobby), id(id), name(name), attributes(attributes), owner(owner) {
+		: lobby(lobby), id(id), name(name), attributes(attributes), owner(owner)
+	{
 		assert(name.length() <= 16);
 		addPlayer(owner);
 		openNetdump();
 	}
-	~Room() {
-		closeNetdump();
-	}
+	~Room();
 
 	uint32_t getId() const {
 		return id;
@@ -316,10 +296,11 @@ public:
 
 protected:
 	void dump(const uint8_t* data, size_t len) override;
-
-private:
 	void handlePacket(const uint8_t *data, size_t len) override;
 	void startTimer();
+	virtual bool handlePacket(Player *player, const uint8_t *data, size_t len) {
+		return false;
+	}
 
 	std::vector<Lobby> lobbies;
 	using PlayerMap = std::map<asio::ip::udp::endpoint, Player *>;
@@ -328,13 +309,23 @@ private:
 	static constexpr uint32_t LOBBY_ID_BASE = 0x3001;
 };
 
+class OuttriggerServer : public LobbyServer
+{
+public:
+	OuttriggerServer(uint16_t port, asio::io_context& io_context)
+		: LobbyServer(Game::Outtrigger, port, io_context) {}
+
+protected:
+	bool handlePacket(Player *player, const uint8_t *data, size_t len) override;
+};
+
 class BootstrapServer : public Server
 {
 public:
 	BootstrapServer(uint16_t port, asio::io_context& io_context)
 		: Server(port, io_context),
 		  bombermanServer(Game::Bomberman, BOMBERMAN_PORT, io_context),
-		  outtriggerServer(Game::Outtrigger, OUTTRIGGER_PORT, io_context),
+		  outtriggerServer(OUTTRIGGER_PORT, io_context),
 		  propellerServer(Game::PropellerA, PROPELLERA_PORT, io_context)
 	{
 	}
@@ -346,7 +337,7 @@ private:
 
 	uint32_t nextUserId = 0x1001;
 	LobbyServer bombermanServer;
-	LobbyServer outtriggerServer;
+	OuttriggerServer outtriggerServer;
 	LobbyServer propellerServer;
 	static constexpr uint16_t BOMBERMAN_PORT = 9091;
 	static constexpr uint16_t OUTTRIGGER_PORT = 9092;
