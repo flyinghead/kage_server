@@ -16,6 +16,7 @@ typedef struct __attribute__((packed))
 
 int main(int argc, char *argv[])
 {
+	/*
 	int opt;
 	int det_time = 0;
 	while ((opt = getopt(argc, argv, "t")) != -1)
@@ -26,6 +27,7 @@ int main(int argc, char *argv[])
 			break;
 		}
 	}
+	*/
 
 	Header h;
 	uint8_t buf[1500];

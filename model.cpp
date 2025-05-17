@@ -648,6 +648,14 @@ void LobbyServer::dump(const uint8_t* data, size_t len)
 
 bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t len)
 {
+	uint16_t flags = read16(data, 0);
+	if (flags & Packet::FLAG_ACK)
+	{
+		player->ackRUdp(read32(data, 0xc));
+		if (player->getRoom() != nullptr)
+			player->getRoom()->startGame();
+	}
+
 	if (data[3] != Packet::REQ_GAME_DATA)
 		return false;
 
@@ -749,17 +757,15 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 				tag.command = TagCmd::GAME_START;
 				gameStart.writeData(tag.full);
 				sendToAll(gameStart, room->getPlayers());
-
-				// send empty UDP data
-				gameStart.init(Packet::REQ_CHAT);
-				gameStart.writeData(0u);	// ?
-				sendToAll(gameStart, room->getPlayers());
+				// wait for this packet to be ack'ed by all players before sending game data
+				room->startSync();
 			}
 			break;
 		}
 
 	case TagCmd::SYNC:	// actual game data
 		{
+			//DEBUG_LOG(game, "tag: SYNC from %s", player->getName().c_str());
 			if (data[0] & 0x80) {
 				// propA sends rel SYNC after creating room
 				packet.init(Packet::REQ_NOP);
@@ -983,6 +989,30 @@ void Room::reset()
 	for (auto& [status, data] : results)
 		status = false;
 	frameNum = 0;
+	syncStarted = false;
+}
+
+void Room::startSync()
+{
+	syncStarted = true;
+	for (Player *pl : players)
+		pl->startSync();
+}
+
+void Room::startGame()
+{
+	if (!syncStarted)
+		return;
+	for (Player *pl : players) {
+		if (!pl->readyToStart())
+			return;
+	}
+	// send empty UDP data to owner to kick start the game
+	Packet packet;
+	packet.init(Packet::REQ_CHAT);
+	packet.writeData(0u);	// frame#?
+	lobby.getServer().send(packet, *owner);
+	syncStarted = false;
 }
 
 void Room::openNetdump()

@@ -77,6 +77,17 @@ public:
 	uint32_t getRelSeqAndInc() {
 		return relSeq++;
 	}
+	void startSync() {
+		gameStartSeq = relSeq - 1;
+		gameStartAcked = false;
+	}
+	void ackRUdp(uint32_t seq) {
+		if (seq == gameStartSeq)
+			gameStartAcked = true;
+	}
+	bool readyToStart() {
+		return gameStartAcked;
+	}
 
 	void setAlive();
 	bool timedOut() const;
@@ -91,6 +102,8 @@ private:
 	Lobby *lobby = nullptr;
 	Room *room = nullptr;
 	uint32_t relSeq = 0; // must start at 0
+	uint32_t gameStartSeq = 0xffff;
+	bool gameStartAcked = false;
 	time_point lastTime;
 };
 
@@ -160,6 +173,9 @@ public:
 		return frameNum++;
 	}
 
+	void startSync();
+	void startGame();
+
 	void writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const;
 
 private:
@@ -179,6 +195,7 @@ private:
 	Player *owner;
 	uint32_t maxPlayers = 0;
 	uint16_t frameNum = 0;
+	bool syncStarted = false;
 	std::vector<Player *> players;
 	std::vector<std::pair<bool, sysdata_t>> sysData;
 	std::vector<bool> ready;
