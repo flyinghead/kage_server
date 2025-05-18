@@ -997,6 +997,17 @@ void Room::startSync()
 	roomState = SyncStarted;
 	for (Player *pl : players)
 		pl->notifyRoomOnAck();
+	timer.expires_after(5s);
+	timer.async_wait([this](const std::error_code& ec) {
+		if (ec)
+			return;
+		INFO_LOG(lobby.getServer().game, "%s: GAME_START not ack'ed after 5 sec. Starting anyway", name.c_str());
+		// send empty UDP data to owner to kick start the game
+		Packet packet;
+		packet.init(Packet::REQ_CHAT);
+		packet.writeData(0u);	// frame#?
+		lobby.getServer().send(packet, *owner);
+	});
 }
 
 void Room::endGame()
@@ -1050,6 +1061,8 @@ void Room::rudpAcked(Player *player)
 		if (state.state != PlayerState::Started)
 			return;
 
+	std::error_code ec;
+	timer.cancel(ec);
 	// send empty UDP data to owner to kick start the game
 	Packet packet;
 	packet.init(Packet::REQ_CHAT);
