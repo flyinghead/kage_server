@@ -86,6 +86,10 @@ public:
 	void setAlive();
 	bool timedOut() const;
 
+	time_point getLastTimeSeen() const {
+		return lastTime;
+	}
+
 private:
 	LobbyServer& server;
 	uint32_t id = 0;

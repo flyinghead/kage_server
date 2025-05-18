@@ -30,8 +30,9 @@ void Player::setAlive() {
 bool Player::timedOut() const
 {
 	if (room == nullptr)
-		return false;
-	return Clock::now() - lastTime >= 30s;
+		return Clock::now() - lastTime >= 2min;
+	else
+		return Clock::now() - lastTime >= 30s;
 }
 
 void Player::ackRUdp(uint32_t seq)
@@ -205,6 +206,14 @@ void LobbyServer::startTimer()
 			if (player->timedOut()) {
 				INFO_LOG(game, "Player %s has timed out", player->getName().c_str());
 				timeouts.push_back(player);
+			}
+			else if (player->getRoom() == nullptr && player->getLastTimeSeen() + 30s >= Clock::now())
+			{
+				// Send a reliable NOP and expect an ack
+				Packet packet;
+				packet.init(Packet::REQ_NOP);
+				packet.flags |= Packet::FLAG_RUDP;
+				send(packet, *player);
 			}
 		}
 		for (Player *player : timeouts)
