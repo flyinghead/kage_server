@@ -107,13 +107,7 @@ private:
 class Room
 {
 public:
-	Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
-		: lobby(lobby), id(id), name(name), attributes(attributes), owner(owner), timer(io_context)
-	{
-		assert(name.length() <= 16);
-		addPlayer(owner);
-		openNetdump();
-	}
+	Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context);
 	~Room();
 
 	uint32_t getId() const {
@@ -185,7 +179,7 @@ private:
 
 	struct PlayerState
 	{
-		enum {
+		enum State {
 			Init,		// initial state
 			SysData,	// SYS data received
 			SysOk,		// SYS_OK is ack'ed
@@ -193,7 +187,7 @@ private:
 			Started,	// START_GAME is ack'ed
 			Result,		// RESULT received
 		};
-		int state;
+		State state;
 		sysdata_t sysdata;
 		std::array<uint8_t, 18> gamedata;
 		result_t result;
@@ -211,6 +205,8 @@ private:
 	std::vector<Player *> players;
 	std::vector<PlayerState> playerState;
 	asio::steady_timer timer;
+	LobbyServer& server;
+	const Game game;
 	FILE *netdump = nullptr;
 };
 

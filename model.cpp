@@ -814,14 +814,23 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 	return true;
 }
 
+Room::Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
+	: lobby(lobby), id(id), name(name), attributes(attributes),
+	  owner(owner), timer(io_context), server(lobby.getServer()), game(server.game)
+{
+	assert(name.length() <= 16);
+	addPlayer(owner);
+	openNetdump();
+}
+
 Room::~Room() {
 	closeNetdump();
-	INFO_LOG(lobby.getServer().game, "Room %s was deleted", name.c_str());
+	INFO_LOG(game, "Room %s was deleted", name.c_str());
 }
 
 void Room::setAttributes(uint32_t attributes)
 {
-	INFO_LOG(lobby.getServer().game, "Room %s status set to %08x", name.c_str(), attributes);
+	INFO_LOG(game, "Room %s status set to %08x", name.c_str(), attributes);
 	if ((attributes & 0x80000000) != 0 && (this->attributes & 0x80000000) == 0)
 		// reset when starting a game
 		reset();
@@ -839,7 +848,7 @@ void Room::addPlayer(Player *player)
 		return;
 	players.push_back(player);
 	player->setRoom(this);
-	INFO_LOG(lobby.getServer().game, "%s joined room %s", player->getName().c_str(), name.c_str());
+	INFO_LOG(game, "%s joined room %s", player->getName().c_str(), name.c_str());
 }
 
 bool Room::removePlayer(Player *player)
@@ -847,7 +856,7 @@ bool Room::removePlayer(Player *player)
 	player->setRoom(nullptr);
 	for (auto it = players.begin(); it != players.end(); ++it)
 		if (player == *it) {
-			INFO_LOG(lobby.getServer().game, "%s left room %s", player->getName().c_str(), name.c_str());
+			INFO_LOG(game, "%s left room %s", player->getName().c_str(), name.c_str());
 			players.erase(it);
 			break;
 		}
@@ -857,7 +866,7 @@ bool Room::removePlayer(Player *player)
 	Packet relay;
 	relay.init(Packet::REQ_LEAVE_LOBBY_ROOM);
 	relay.writeData(player->getId());
-	lobby.getServer().sendToAll(relay, getPlayers());
+	server.sendToAll(relay, getPlayers());
 
 	if (owner == player)
 	{
@@ -870,8 +879,8 @@ bool Room::removePlayer(Player *player)
 		TagCmd tag;
 		tag.command = TagCmd::OWNER;
 		packet.writeData(tag.full);
-		lobby.getServer().send(packet, *owner);
-		INFO_LOG(lobby.getServer().game, "%s is the new owner of %s", owner->getName().c_str(), name.c_str());
+		server.send(packet, *owner);
+		INFO_LOG(game, "%s is the new owner of %s", owner->getName().c_str(), name.c_str());
 
 		if (players.size() >= 2)
 		{
@@ -881,7 +890,7 @@ bool Room::removePlayer(Player *player)
 			packet.writeData(0u);
 			tag.command = TagCmd::START_OK;
 			packet.writeData(tag.full);
-			lobby.getServer().send(packet, *owner);
+			server.send(packet, *owner);
 		}
 	}
 	return false;
@@ -900,7 +909,7 @@ void Room::setSysData(const Player *player, const sysdata_t& sysdata)
 {
 	int i = getPlayerIndex(player);
 	if (i < 0) {
-		WARN_LOG(lobby.getServer().game, "setSysData: player not found in room");
+		WARN_LOG(game, "setSysData: player not found in room");
 		return;
 	}
 	playerState[i].sysdata = sysdata;
@@ -911,7 +920,7 @@ bool Room::setReady(const Player *player)
 {
 	int i = getPlayerIndex(player);
 	if (i < 0) {
-		WARN_LOG(lobby.getServer().game, "setReady: player not found in room");
+		WARN_LOG(game, "setReady: player not found in room");
 		return false;
 	}
 	playerState[i].state = PlayerState::Ready;
@@ -956,7 +965,7 @@ void Room::sendGameData(const std::error_code& ec)
 	packet.writeData(getNextFrame());
 	for (const PlayerState& state : playerState)
 		packet.writeData(state.gamedata.data(), state.gamedata.size());
-	lobby.getServer().sendToAll(packet, players);
+	server.sendToAll(packet, players);
 
 	// send game data every 66.667 ms (4 frames) like the game does
 	if (roomState == InGame) {
@@ -1010,12 +1019,12 @@ void Room::startSync()
 	timer.async_wait([this](const std::error_code& ec) {
 		if (ec)
 			return;
-		INFO_LOG(lobby.getServer().game, "%s: GAME_START not ack'ed after 5 sec. Starting anyway", name.c_str());
+		INFO_LOG(game, "%s: GAME_START not ack'ed after 5 sec. Starting anyway", name.c_str());
 		// send empty UDP data to owner to kick start the game
 		Packet packet;
 		packet.init(Packet::REQ_CHAT);
 		packet.writeData(0u);	// frame#?
-		lobby.getServer().send(packet, *owner);
+		server.send(packet, *owner);
 	});
 }
 
@@ -1031,14 +1040,15 @@ void Room::rudpAcked(Player *player)
 	int i = getPlayerIndex(player);
 	if (i < 0)
 		return;
-	if (playerState[i].state == PlayerState::SysData)
+	PlayerState::State& state = playerState[i].state;
+	if (state == PlayerState::SysData)
 	{
-		playerState[i].state = PlayerState::SysOk;
-		for (const PlayerState& state : playerState)
-			if (state.state != PlayerState::SysOk)
+		state = PlayerState::SysOk;
+		for (const PlayerState& pstate : playerState)
+			if (pstate.state != PlayerState::SysOk)
 				return;
 		// send SYS2
-		INFO_LOG(lobby.getServer().game, "%s: Sending SYS2 to all players", name.c_str());
+		INFO_LOG(game, "%s: Sending SYS2 to all players", name.c_str());
 		std::vector<Room::sysdata_t> sysdata  = getSysData();
 		Packet sys2;
 		sys2.init(Packet::RSP_TAG_CMD);
@@ -1056,18 +1066,18 @@ void Room::rudpAcked(Player *player)
 			// notify each player of his position in the game
 			tag.id = userId++;
 			write16(sys2.data, 0x14, tag.full);
-			lobby.getServer().send(sys2, *pl);
+			server.send(sys2, *pl);
 		}
 
 		return;
 	}
 
-	if (roomState != SyncStarted || playerState[i].state != PlayerState::Ready)
+	if (roomState != SyncStarted || state != PlayerState::Ready)
 		return;
-	playerState[i].state = PlayerState::Started;
-	INFO_LOG(lobby.getServer().game, "%s: GAME_START ack'ed by %s", name.c_str(), player->getName().c_str());
-	for (const PlayerState& state : playerState)
-		if (state.state != PlayerState::Started)
+	state = PlayerState::Started;
+	INFO_LOG(game, "%s: GAME_START ack'ed by %s", name.c_str(), player->getName().c_str());
+	for (const PlayerState& pstate : playerState)
+		if (pstate.state != PlayerState::Started)
 			return;
 
 	std::error_code ec;
@@ -1076,7 +1086,7 @@ void Room::rudpAcked(Player *player)
 	Packet packet;
 	packet.init(Packet::REQ_CHAT);
 	packet.writeData(0u);	// frame#?
-	lobby.getServer().send(packet, *owner);
+	server.send(packet, *owner);
 }
 
 void Room::openNetdump()
@@ -1091,7 +1101,7 @@ void Room::openNetdump()
 	std::replace(fname.begin(), fname.end(), '/', '_');
 	netdump = fopen(fname.c_str(), "w");
 	if (netdump == nullptr)
-		WARN_LOG(lobby.getServer().game, "Can't open netdump file %s: error %d", fname.c_str(), errno);
+		WARN_LOG(game, "Can't open netdump file %s: error %d", fname.c_str(), errno);
 }
 
 void Room::writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const
