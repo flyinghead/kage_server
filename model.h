@@ -77,17 +77,11 @@ public:
 	uint32_t getRelSeqAndInc() {
 		return relSeq++;
 	}
-	void startSync() {
-		gameStartSeq = relSeq - 1;
-		gameStartAcked = false;
+
+	void notifyRoomOnAck() {
+		waitingForSeq = relSeq - 1;
 	}
-	void ackRUdp(uint32_t seq) {
-		if (seq == gameStartSeq)
-			gameStartAcked = true;
-	}
-	bool readyToStart() {
-		return gameStartAcked;
-	}
+	void ackRUdp(uint32_t seq);
 
 	void setAlive();
 	bool timedOut() const;
@@ -102,16 +96,15 @@ private:
 	Lobby *lobby = nullptr;
 	Room *room = nullptr;
 	uint32_t relSeq = 0; // must start at 0
-	uint32_t gameStartSeq = 0xffff;
-	bool gameStartAcked = false;
+	int waitingForSeq = -1;
 	time_point lastTime;
 };
 
 class Room
 {
 public:
-	Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner)
-		: lobby(lobby), id(id), name(name), attributes(attributes), owner(owner)
+	Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
+		: lobby(lobby), id(id), name(name), attributes(attributes), owner(owner), timer(io_context)
 	{
 		assert(name.length() <= 16);
 		addPlayer(owner);
@@ -155,12 +148,8 @@ public:
 
 	using sysdata_t = std::array<uint8_t, 20>;
 	std::vector<sysdata_t> getSysData() const;
-	bool setSysData(const Player *player, const sysdata_t& sysdata);
+	void setSysData(const Player *player, const sysdata_t& sysdata);
 
-	using gamedata_t = std::array<uint8_t, 18>;
-	const std::vector<gamedata_t>& getGameData() const {
-		return gameData;
-	}
 	void setGameData(const Player *player, const uint8_t *data);
 
 	using result_t = std::array<uint8_t, 32>;
@@ -174,18 +163,37 @@ public:
 	}
 
 	void startSync();
-	void startGame();
+	void endGame();
+
+	void rudpAcked(Player *player);
 
 	void writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const;
 
 private:
 	void reset();
 	void openNetdump();
+	void sendGameData(const std::error_code& ec);
 
 	void closeNetdump() {
 		if (netdump != nullptr)
 			fclose(netdump);
 	}
+
+	struct PlayerState
+	{
+		enum {
+			Init,		// initial state
+			SysData,	// SYS data received
+			SysOk,		// SYS_OK is ack'ed
+			Ready,		// READY received
+			Started,	// START_GAME is ack'ed
+			Result,		// RESULT received
+		};
+		int state;
+		sysdata_t sysdata;
+		std::array<uint8_t, 18> gamedata;
+		result_t result;
+	};
 
 	Lobby& lobby;
 	const uint32_t id;
@@ -195,12 +203,10 @@ private:
 	Player *owner;
 	uint32_t maxPlayers = 0;
 	uint16_t frameNum = 0;
-	bool syncStarted = false;
+	enum { Init, SyncStarted, InGame, Result } roomState = Init;
 	std::vector<Player *> players;
-	std::vector<std::pair<bool, sysdata_t>> sysData;
-	std::vector<bool> ready;
-	std::vector<gamedata_t> gameData;
-	std::vector<std::pair<bool, result_t>> results;
+	std::vector<PlayerState> playerState;
+	asio::steady_timer timer;
 	FILE *netdump = nullptr;
 };
 
@@ -245,7 +251,7 @@ public:
 	}
 	Room *getRoom(uint32_t id) const;
 	std::vector<Room *> getRooms() const;
-	Room *addRoom(const std::string& name, uint32_t attributes, Player *owner);
+	Room *addRoom(const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context);
 	void removeRoom(Room *room);
 
 private:
@@ -322,6 +328,7 @@ protected:
 	std::vector<Lobby> lobbies;
 	using PlayerMap = std::map<asio::ip::udp::endpoint, Player *>;
 	PlayerMap players;
+	asio::io_context& io_context;
 	asio::steady_timer timer;
 	static constexpr uint32_t LOBBY_ID_BASE = 0x3001;
 };

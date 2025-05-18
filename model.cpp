@@ -34,6 +34,16 @@ bool Player::timedOut() const
 	return Clock::now() - lastTime >= 30s;
 }
 
+void Player::ackRUdp(uint32_t seq)
+{
+	if (seq == (unsigned)waitingForSeq)
+	{
+		waitingForSeq = -1;
+		if (room != nullptr)
+			room->rudpAcked(this);
+	}
+}
+
 void Server::read()
 {
 	socket.async_receive_from(asio::buffer(recvbuf), source,
@@ -175,7 +185,7 @@ void BootstrapServer::handlePacket(const uint8_t *data, size_t len)
 }
 
 LobbyServer::LobbyServer(Game game, uint16_t port, asio::io_context& io_context)
-	: Server(port, io_context), game(game), timer(io_context)
+	: Server(port, io_context), game(game), io_context(io_context), timer(io_context)
 
 {
 	lobbies.reserve(10);
@@ -494,7 +504,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			else
 			{
 				attributes |= 1;	// server ready?
-				Room *room = player->getLobby()->addRoom(name, attributes, player);
+				Room *room = player->getLobby()->addRoom(name, attributes, player, io_context);
 				room->setMaxPlayers(maxPlayers);
 				/* Should it be sent to other players in lobby?
 				packet.init(Packet::REQ_CREATE_ROOM);
@@ -650,11 +660,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 {
 	uint16_t flags = read16(data, 0);
 	if (flags & Packet::FLAG_ACK)
-	{
 		player->ackRUdp(read32(data, 0xc));
-		if (player->getRoom() != nullptr)
-			player->getRoom()->startGame();
-	}
 
 	if (data[3] != Packet::REQ_GAME_DATA)
 		return false;
@@ -704,36 +710,15 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 			tag.command = TagCmd::SYS_OK;
 			packet.writeData(tag.full);
 			send(packet, *player);
+			// FIXME what if SYS_OK has already been sent and ack'ed once?
+			player->notifyRoomOnAck();
 
 			Room *room = player->getRoom();
 			if (room != nullptr)
 			{
 				Room::sysdata_t sysdata;
 				memcpy(sysdata.data(), &data[0x12], sysdata.size());
-				if (room->setSysData(player, sysdata))
-				{
-					// send SYS2
-					INFO_LOG(game, "%s: Sending SYS2 to all players", room->getName().c_str());
-					std::vector<Room::sysdata_t> sysdata  = room->getSysData();
-					Packet sys2;
-					sys2.init(Packet::RSP_TAG_CMD);
-					sys2.flags |= Packet::FLAG_RUDP;
-					sys2.writeData(0u);	// list: count [int ...]
-					TagCmd tag;
-					tag.command = TagCmd::SYS2;
-					tag.player = (uint16_t)sysdata.size();
-					sys2.writeData(tag.full);
-					for (const Room::sysdata_t& data : sysdata)
-						sys2.writeData(data.data(), data.size());
-					uint16_t userId = 0;
-					for (Player *pl : room->getPlayers())
-					{
-						// notify each player of his position in the game
-						tag.id = userId++;
-						write16(sys2.data, 0x14, tag.full);
-						send(sys2, *pl);
-					}
-				}
+				room->setSysData(player, sysdata);
 			}
 			break;
 		}
@@ -774,17 +759,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 			}
 			Room *room = player->getRoom();
 			if (room != nullptr)
-			{
-				Packet packet;
-				packet.init(Packet::REQ_CHAT);
-				packet.writeData(room->getNextFrame());
-
 				room->setGameData(player, &data[0x12]);
-				std::vector<Room::gamedata_t> vec = room->getGameData();
-				for (auto& gd : vec)
-					packet.writeData(gd.data(), gd.size());
-				sendToAll(packet, room->getPlayers(), player);
-			}
 			break;
 		}
 
@@ -888,6 +863,17 @@ bool Room::removePlayer(Player *player)
 		packet.writeData(tag.full);
 		lobby.getServer().send(packet, *owner);
 		INFO_LOG(lobby.getServer().game, "%s is the new owner of %s", owner->getName().c_str(), name.c_str());
+
+		if (players.size() >= 2)
+		{
+			// Send START_OK
+			packet.init(Packet::RSP_TAG_CMD);
+			packet.flags |= Packet::FLAG_RUDP;
+			packet.writeData(0u);
+			tag.command = TagCmd::START_OK;
+			packet.writeData(tag.full);
+			lobby.getServer().send(packet, *owner);
+		}
 	}
 	return false;
 }
@@ -895,38 +881,33 @@ bool Room::removePlayer(Player *player)
 std::vector<Room::sysdata_t> Room::getSysData() const
 {
 	std::vector<sysdata_t> sysdata;
-	sysdata.reserve(sysData.size());
-	for (const auto& [status, data] : sysData)
-		sysdata.push_back(data);
+	sysdata.reserve(playerState.size());
+	for (const auto& state : playerState)
+		sysdata.push_back(state.sysdata);
 	return sysdata;
 }
 
-bool Room::setSysData(const Player *player, const sysdata_t& sysdata)
+void Room::setSysData(const Player *player, const sysdata_t& sysdata)
 {
-	sysData.resize(players.size());
 	int i = getPlayerIndex(player);
 	if (i < 0) {
 		WARN_LOG(lobby.getServer().game, "setSysData: player not found in room");
-		return false;
+		return;
 	}
-	sysData[i] = std::make_pair(true, sysdata);
-	for (const auto& [status, data] : sysData)
-		if (!status)
-			return false;
-	return true;
+	playerState[i].sysdata = sysdata;
+	playerState[i].state = PlayerState::SysData;
 }
 
 bool Room::setReady(const Player *player)
 {
-	ready.resize(players.size());
 	int i = getPlayerIndex(player);
 	if (i < 0) {
 		WARN_LOG(lobby.getServer().game, "setReady: player not found in room");
 		return false;
 	}
-	ready[i] = true;
-	for (bool r : ready)
-		if (!r)
+	playerState[i].state = PlayerState::Ready;
+	for (const auto& state : playerState)
+		if (state.state != PlayerState::Ready)
 			return false;
 	return true;
 }
@@ -948,71 +929,132 @@ int Room::getPlayerIndex(const Player *player)
 
 void Room::setGameData(const Player *player, const uint8_t *data)
 {
-	gameData.resize(players.size());
 	int i = getPlayerIndex(player);
 	if (i < 0)
 		return;
-	gamedata_t gamedata;
-	memcpy(gamedata.data(), data, gamedata.size());
-	gameData[i] = gamedata;
+	memcpy(playerState[i].gamedata.data(), data, playerState[i].gamedata.size());
+	if (roomState != InGame)
+		sendGameData({});
+}
+
+void Room::sendGameData(const std::error_code& ec)
+{
+	if (ec)
+		return;
+
+	Packet packet;
+	packet.init(Packet::REQ_CHAT);
+	packet.writeData(getNextFrame());
+	for (const PlayerState& state : playerState)
+		packet.writeData(state.gamedata.data(), state.gamedata.size());
+	lobby.getServer().sendToAll(packet, players);
+
+	// send game data every 66.667 ms (4 frames) like the game does
+	if (roomState == InGame) {
+		timer.expires_at(timer.expiry() + 66667us);
+	}
+	else {
+		timer.expires_after(66667us);
+		roomState = InGame;
+	}
+	timer.async_wait(std::bind(&Room::sendGameData, this, asio::placeholders::error));
 }
 
 std::vector<Room::result_t> Room::getResults() const
 {
 	std::vector<result_t> results;
-	results.reserve(this->results.size());
-	for (const auto& [status, result] : this->results)
-		results.push_back(result);
+	results.reserve(this->playerState.size());
+	for (const PlayerState& state : playerState)
+		results.push_back(state.result);
 	return results;
 }
 
 bool Room::setResult(const Player *player, const uint8_t *data)
 {
-	results.resize(players.size());
 	int i = getPlayerIndex(player);
 	if (i < 0)
 		return false;
-	result_t result;
-	memcpy(result.data(), data, result.size());
-	results[i] = std::make_pair(true, result);
-	for (const auto& [status, result] : results)
-		if (!status)
+	memcpy(playerState[i].result.data(), data, playerState[i].result.size());
+	playerState[i].state = PlayerState::Result;
+	for (const PlayerState& state : playerState)
+		if (state.state != PlayerState::Result)
 			return false;
+	endGame();
 	return true;
 }
 
 void Room::reset()
 {
-	for (auto& [status, data] : sysData)
-		status = false;
-	ready.clear();
-	for (auto& [status, data] : results)
-		status = false;
+	playerState.resize(players.size());
+	for (auto& state : playerState)
+		state.state = PlayerState::Init;
 	frameNum = 0;
-	syncStarted = false;
+	roomState = Init;
 }
 
 void Room::startSync()
 {
-	syncStarted = true;
+	roomState = SyncStarted;
 	for (Player *pl : players)
-		pl->startSync();
+		pl->notifyRoomOnAck();
 }
 
-void Room::startGame()
+void Room::endGame()
 {
-	if (!syncStarted)
+	std::error_code ec;
+	timer.cancel(ec);
+	roomState = Result;
+}
+
+void Room::rudpAcked(Player *player)
+{
+	int i = getPlayerIndex(player);
+	if (i < 0)
 		return;
-	for (Player *pl : players) {
-		if (!pl->readyToStart())
-			return;
+	if (playerState[i].state == PlayerState::SysData)
+	{
+		playerState[i].state = PlayerState::SysOk;
+		for (const PlayerState& state : playerState)
+			if (state.state != PlayerState::SysOk)
+				return;
+		// send SYS2
+		INFO_LOG(lobby.getServer().game, "%s: Sending SYS2 to all players", name.c_str());
+		std::vector<Room::sysdata_t> sysdata  = getSysData();
+		Packet sys2;
+		sys2.init(Packet::RSP_TAG_CMD);
+		sys2.flags |= Packet::FLAG_RUDP;
+		sys2.writeData(0u);	// list: count [int ...]
+		TagCmd tag;
+		tag.command = TagCmd::SYS2;
+		tag.player = (uint16_t)sysdata.size();
+		sys2.writeData(tag.full);
+		for (const Room::sysdata_t& data : sysdata)
+			sys2.writeData(data.data(), data.size());
+		uint16_t userId = 0;
+		for (Player *pl : players)
+		{
+			// notify each player of his position in the game
+			tag.id = userId++;
+			write16(sys2.data, 0x14, tag.full);
+			lobby.getServer().send(sys2, *pl);
+		}
+
+		return;
 	}
+
+	if (roomState != SyncStarted || playerState[i].state != PlayerState::Ready)
+		return;
+	playerState[i].state = PlayerState::Started;
+	INFO_LOG(lobby.getServer().game, "%s: GAME_START ack'ed by %s", name.c_str(), player->getName().c_str());
+	for (const PlayerState& state : playerState)
+		if (state.state != PlayerState::Started)
+			return;
+
 	// send empty UDP data to owner to kick start the game
 	Packet packet;
 	packet.init(Packet::REQ_CHAT);
 	packet.writeData(0u);	// frame#?
 	lobby.getServer().send(packet, *owner);
-	syncStarted = false;
 }
 
 void Room::openNetdump()
@@ -1105,10 +1147,10 @@ Room *Lobby::getRoom(uint32_t id) const
 		return it->second;
 }
 
-Room *Lobby::addRoom(const std::string& name, uint32_t attributes, Player *owner)
+Room *Lobby::addRoom(const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
 {
 	uint32_t id = nextRoomId++;
-	Room *room = new Room(*this, id, name, attributes, owner);
+	Room *room = new Room(*this, id, name, attributes, owner, io_context);
 	rooms[id] = room;
 	// Discord presence
 	std::vector<std::string> lobbyUsers;
