@@ -37,9 +37,10 @@ using time_point = std::chrono::time_point<Clock>;
 class Player
 {
 public:
-	Player(LobbyServer& server, const asio::ip::udp::endpoint& endpoint,
-			uint32_t id)
-		: server(server), id(id), endpoint(endpoint) {
+	Player(LobbyServer& server, const asio::ip::udp::endpoint& endpoint, uint32_t id)
+		: server(server), id(id), endpoint(endpoint)
+	{
+		setAlive();
 	}
 
 	uint32_t getId() const {
