@@ -1,6 +1,6 @@
 CFLAGS = -g -Wall -O3 # -fsanitize=address -static-libasan
 CXXFLAGS = $(CFLAGS) -std=c++17
-DEPS = asio.h blowfish.h model.h propa_rank.h discord.h log.h kage.h
+DEPS = asio.h blowfish.h model.h propa_rank.h discord.h log.h kage.h propa_auth.h
 
 all: kageserver ot_dissect
 

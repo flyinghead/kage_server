@@ -46,7 +46,7 @@ static inline void write32(uint8_t *p, unsigned offset, uint32_t v) {
 class Packet
 {
 public:
-	enum {
+	enum Command : uint8_t {
 		REQ_BOOTSTRAP_LOGIN = 0x2c,
 
 		REQ_NOP = 0,
@@ -80,25 +80,37 @@ public:
 		FLAG_RUDP = 0x8000,
 	};
 
-	uint8_t data[0x800];
+	uint8_t data[0x800] {};
 	uint16_t size = 0x10;
 	uint16_t startOffset = 0;
-	uint16_t flags = 0;
-	uint8_t type = 0;
+	uint16_t flags = FLAG_UNKNOWN;
+	Command type = REQ_NOP;
 
-	void init(uint8_t type)
+	void reset()
 	{
 		startOffset = 0;
 		size = 0x10;
-		this->type = type;
+		this->type = REQ_NOP;
 		memset(data, 0, sizeof(data));
 		flags = FLAG_UNKNOWN;
 	}
-	void respOK(uint8_t type) {
+
+	void init(Command type)
+	{
+		if (!empty()) {
+			finalize();
+			append(type);
+		}
+		else {
+			reset();
+			this->type = type;
+		}
+	}
+	void respOK(Command type) {
 		init(RSP_OK);
 		writeData((uint32_t)type);
 	}
-	void respFailed(uint8_t type) {
+	void respFailed(Command type) {
 		init(RSP_FAILED);
 		writeData((uint32_t)type);
 	}
@@ -134,27 +146,31 @@ public:
 		write32(data, startOffset + 0xc, seq);
 	}
 
-	size_t finalize(int sequence, uint32_t userId)
+	size_t finalize()
 	{
 		const uint16_t chunkSize = size - startOffset;
 		if (chunkSize > 0x3ff)
 			throw std::runtime_error("Packet too big");
 		write16(data, startOffset, flags | chunkSize);
 		data[startOffset + 3] = type;
-		write32(data, startOffset + 4, userId);
-		write32(data, startOffset + 8, sequence);
 		memcpy(&data[size], &ServerTag, sizeof(ServerTag));
 		return size + sizeof(ServerTag);
 	}
 
-	void append(uint8_t type)
+	void append(Command type)
 	{
 		if (startOffset == 0)
 			write16(data, 0, read16(data, 0) | FLAG_CONTINUE);
 		startOffset = size;
+		// reset server tag to 0
+		memset(&data[size], 0, sizeof(ServerTag));
 		size += 0x10;
 		this->type = type;
 		flags = FLAG_UNKNOWN;
+	}
+
+	bool empty() const {
+		return size == 0x10 && flags == FLAG_UNKNOWN && type == REQ_NOP && startOffset == 0;
 	}
 
 	static constexpr uint32_t ServerTag = 0x006647BA;

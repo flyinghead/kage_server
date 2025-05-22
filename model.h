@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <string>
 #include <array>
+#include <deque>
 #include <map>
 #include <chrono>
 
@@ -37,8 +38,8 @@ using time_point = std::chrono::time_point<Clock>;
 class Player
 {
 public:
-	Player(LobbyServer& server, const asio::ip::udp::endpoint& endpoint, uint32_t id)
-		: server(server), id(id), endpoint(endpoint)
+	Player(LobbyServer& server, const asio::ip::udp::endpoint& endpoint, uint32_t id, asio::io_context& io_context)
+		: server(server), id(id), endpoint(endpoint), timer(io_context)
 	{
 		setAlive();
 	}
@@ -78,9 +79,12 @@ public:
 	uint32_t getRelSeqAndInc() {
 		return relSeq++;
 	}
+	uint32_t getUnrelSeqAndInc() {
+		return unrelSeq++;
+	}
 
 	void notifyRoomOnAck() {
-		waitingForSeq = relSeq - 1;
+		waitingForSeq = relSeq;
 	}
 	void ackRUdp(uint32_t seq);
 
@@ -91,7 +95,11 @@ public:
 		return lastTime;
 	}
 
+	void sendRel(Packet& packet);
+
 private:
+	void resendTimer(const std::error_code& ec);
+
 	LobbyServer& server;
 	uint32_t id = 0;
 	std::string name;
@@ -101,8 +109,14 @@ private:
 	Lobby *lobby = nullptr;
 	Room *room = nullptr;
 	uint32_t relSeq = 0; // must start at 0
+	int ackedRelSeq = -1;
+	uint32_t unrelSeq = 0;
 	int waitingForSeq = -1;
 	time_point lastTime;
+	Packet lastRelPacket;
+	std::deque<Packet> relQueue;
+	asio::steady_timer timer;
+	int sendCount = 0;
 };
 
 class Room
@@ -133,6 +147,13 @@ public:
 		this->maxPlayers = maxPlayers;
 	}
 
+	const std::string& getPassword() const {
+		return password;
+	}
+	void setPassword(const std::string& password) {
+		this->password = password;
+	}
+
 	uint32_t getPlayerCount() const {
 		return (uint32_t)players.size();
 	}
@@ -161,6 +182,7 @@ public:
 		return frameNum++;
 	}
 
+	void reset();
 	void startSync();
 	void endGame();
 
@@ -169,7 +191,6 @@ public:
 	void writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const;
 
 private:
-	void reset();
 	void openNetdump();
 	void sendGameData(const std::error_code& ec);
 
@@ -201,6 +222,7 @@ private:
 							// c0000000 => start game
 	Player *owner;
 	uint32_t maxPlayers = 0;
+	std::string password;
 	uint16_t frameNum = 0;
 	enum { Init, SyncStarted, InGame, Result } roomState = Init;
 	std::vector<Player *> players;
@@ -270,7 +292,8 @@ public:
 	virtual ~Server() {}
 
 	Server(uint16_t port, asio::io_context& io_context)
-		: socket(io_context, asio::ip::udp::endpoint(asio::ip::udp::v4(), port))
+		: io_context(io_context),
+		  socket(io_context, asio::ip::udp::endpoint(asio::ip::udp::v4(), port))
 	{
 		asio::socket_base::reuse_address option(true);
 		socket.set_option(option);
@@ -282,14 +305,19 @@ public:
 
 protected:
 	void read();
+	// Called for each packet in the datagram
 	virtual void handlePacket(const uint8_t *data, size_t len) = 0;
+	// Called after all packets have been handled
+	virtual void handlePacketDone() {
+	}
+	// Hook to dump all UDP data received
 	virtual void dump(const uint8_t* data, size_t len) {
 	}
 
+	asio::io_context& io_context;
 	asio::ip::udp::socket socket;
 	std::array<uint8_t, 1510> recvbuf;
 	asio::ip::udp::endpoint source;	// source endpoint when receiving packets
-	uint32_t unrelSeq = 1;
 };
 
 class LobbyServer : public Server
@@ -315,22 +343,29 @@ public:
 	void removePlayer(Player *player);
 	void send(Packet& packet, Player& player);
 	void sendToAll(Packet& packet, const std::vector<Player *>& players, Player *except = nullptr);
+	void sendNow(Packet& packet, Player& player);
 
 	const Game game;
 
 protected:
 	void dump(const uint8_t* data, size_t len) override;
 	void handlePacket(const uint8_t *data, size_t len) override;
-	void startTimer();
+	void handlePacketDone() override;
+	// Game-specific packet handling called before normal handling to be overridden by subclasses.
+	// Returns true if the packet was handled.
 	virtual bool handlePacket(Player *player, const uint8_t *data, size_t len) {
 		return false;
 	}
+	void startTimer();
 
 	std::vector<Lobby> lobbies;
 	using PlayerMap = std::map<asio::ip::udp::endpoint, Player *>;
 	PlayerMap players;
-	asio::io_context& io_context;
 	asio::steady_timer timer;
+	// Current player and packets during packet handling
+	Player *player = nullptr;
+	Packet replyPacket;
+	Packet relayPacket;
 	static constexpr uint32_t LOBBY_ID_BASE = 0x3001;
 };
 
