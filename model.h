@@ -76,9 +76,9 @@ public:
 		this->room = room;
 	}
 
-	uint32_t getRelSeqAndInc() {
-		return relSeq++;
-	}
+	void send(Packet& packet);
+	static void sendToAll(Packet& packet, const std::vector<Player *>& players, Player *except = nullptr);
+
 	uint32_t getUnrelSeqAndInc() {
 		return unrelSeq++;
 	}
@@ -95,9 +95,8 @@ public:
 		return lastTime;
 	}
 
-	void sendRel(Packet& packet);
-
 private:
+	void sendRel(Packet& packet, uint32_t seq);
 	void resendTimer(const std::error_code& ec);
 
 	LobbyServer& server;
@@ -114,7 +113,7 @@ private:
 	int waitingForSeq = -1;
 	time_point lastTime;
 	Packet lastRelPacket;
-	std::deque<Packet> relQueue;
+	std::deque<std::pair<uint32_t, Packet>> relQueue;
 	asio::steady_timer timer;
 	int sendCount = 0;
 };
@@ -341,9 +340,7 @@ public:
 
 	void addPlayer(Player *player);
 	void removePlayer(Player *player);
-	void send(Packet& packet, Player& player);
-	void sendToAll(Packet& packet, const std::vector<Player *>& players, Player *except = nullptr);
-	void sendNow(Packet& packet, Player& player);
+	void send(Packet& packet, const asio::ip::udp::endpoint& endpoint);
 
 	const Game game;
 

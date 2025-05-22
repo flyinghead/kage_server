@@ -35,22 +35,47 @@ bool Player::timedOut() const
 		return Clock::now() - lastTime >= 30s;
 }
 
-void Player::sendRel(Packet& packet)
+void Player::send(Packet& packet)
 {
-	uint32_t seq;
-	unsigned i = 0;
+	packet.finalize();
+	// Loop through all packets and set the player id (offset 4) and sequence number (offset 8)
+	size_t i = 0;
+	bool rudpSeen = false;
 	while (i < packet.size)
 	{
 		uint16_t size = read16(packet.data, i);
 		uint16_t flags = size & 0xfc00;
 		size &= 0x3ff;
-		if (flags & Packet::FLAG_RUDP) {
-			seq = read32(packet.data, i + 8);
-			break;
+		Packet::Command com = (Packet::Command)packet.data[i + 3];
+		if (flags & Packet::FLAG_RUDP)
+		{
+			// Only the first reliable packet has a seq#
+			if (!rudpSeen)
+				write32(packet.data, i + 8, relSeq++);
+			rudpSeen = true;
 		}
+		else if (com != Packet::REQ_NOP) {
+			// unreliable NOPs don't have a seq#
+			write32(packet.data, i + 8, unrelSeq++);
+		}
+		write32(packet.data, i + 4, id);
 		i += size;
 	}
-	assert(i < packet.size);
+	if (rudpSeen)
+		sendRel(packet, relSeq - 1);
+	else
+		server.send(packet, getEndpoint());
+}
+
+void Player::sendToAll(Packet& packet, const std::vector<Player *>& players, Player *except)
+{
+	for (Player *pl : players)
+		if (pl != except)
+			pl->send(packet);
+}
+
+void Player::sendRel(Packet& packet, uint32_t seq)
+{
 	if ((int)seq == ackedRelSeq + 1)
 	{
 		lastRelPacket = packet;
@@ -58,7 +83,7 @@ void Player::sendRel(Packet& packet)
 		resendTimer({});
 	}
 	else {
-		relQueue.push_back(packet);
+		relQueue.push_back(std::make_pair(seq, packet));
 	}
 }
 
@@ -71,13 +96,13 @@ void Player::resendTimer(const std::error_code& ec)
 		WARN_LOG(server.game, "Sending packet %x to %s failed after %d attempts", lastRelPacket.data[3], name.c_str(), sendCount);
 		ackedRelSeq++;
 		if (!relQueue.empty()) {
-			sendRel(relQueue.front());
+			sendRel(relQueue.front().second, relQueue.front().first);
 			relQueue.pop_front();
 		}
 		return;
 	}
 	sendCount++;
-	server.sendNow(lastRelPacket, *this);
+	server.send(lastRelPacket, getEndpoint());
 	timer.expires_after(500ms);
 	// game (bba) apparently retries after 100 ms, 200 ms, 400 ms, 800 ms then timeout
 	timer.async_wait(std::bind(&Player::resendTimer, this, asio::placeholders::error));
@@ -89,7 +114,7 @@ void Player::ackRUdp(uint32_t seq)
 	std::error_code ec;
 	timer.cancel(ec);
 	if (!relQueue.empty()) {
-		sendRel(relQueue.front());
+		sendRel(relQueue.front().second, relQueue.front().first);
 		relQueue.pop_front();
 	}
 	if (seq == (unsigned)waitingForSeq)
@@ -272,7 +297,7 @@ void LobbyServer::startTimer()
 				Packet packet;
 				packet.init(Packet::REQ_NOP);
 				packet.flags |= Packet::FLAG_RUDP;
-				send(packet, *player);
+				player->send(packet);
 			}
 		}
 		for (Player *player : timeouts)
@@ -306,50 +331,11 @@ void LobbyServer::removePlayer(Player *player)
 	delete player;
 }
 
-void LobbyServer::send(Packet& packet, Player& player)
-{
-	packet.finalize();
-	// Loop through all packets and set the player id (offset 4) and sequence number (offset 8)
-	size_t i = 0;
-	bool rudpSeen = false;
-	while (i < packet.size)
-	{
-		uint16_t size = read16(packet.data, i);
-		uint16_t flags = size & 0xfc00;
-		size &= 0x3ff;
-		Packet::Command com = (Packet::Command)packet.data[i + 3];
-		if (flags & Packet::FLAG_RUDP)
-		{
-			// Only the first reliable packet has a seq#
-			if (!rudpSeen)
-				write32(packet.data, i + 8, player.getRelSeqAndInc());
-			rudpSeen = true;
-		}
-		else if (com != Packet::REQ_NOP) {
-			// unreliable NOPs don't have a seq#
-			write32(packet.data, i + 8, player.getUnrelSeqAndInc());
-		}
-		write32(packet.data, i + 4, player.getId());
-		i += size;
-	}
-	if (rudpSeen)
-		player.sendRel(packet);
-	else
-		sendNow(packet, player);
-}
-
-void LobbyServer::sendNow(Packet& packet, Player& player)
+void LobbyServer::send(Packet& packet, const asio::ip::udp::endpoint& endpoint)
 {
 	size_t pktsize = packet.finalize();
 	std::error_code ec2;
-	socket.send_to(asio::buffer(packet.data, pktsize), player.getEndpoint(), 0, ec2);
-}
-
-void LobbyServer::sendToAll(Packet& packet, const std::vector<Player *>& players, Player *except)
-{
-	for (Player *pl : players)
-		if (pl != except)
-			send(packet, *pl);
+	socket.send_to(asio::buffer(packet.data, pktsize), endpoint, 0, ec2);
 }
 
 void LobbyServer::handlePacket(const uint8_t *data, size_t len)
@@ -382,7 +368,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		{
 			replyPacket.respOK(Packet::REQ_LOBBY_LOGOUT);
 			replyPacket.ack(read32(data, 8));
-			send(replyPacket, *player);
+			player->send(replyPacket);
 			removePlayer(player);
 			player = nullptr;
 			break;
@@ -763,15 +749,15 @@ void LobbyServer::handlePacketDone()
 	if (player != nullptr)
 	{
 		if (!replyPacket.empty())
-			send(replyPacket, *player);
+			player->send(replyPacket);
 		if (!relayPacket.empty())
 		{
 			if (relayPacket.flags & Packet::FLAG_LOBBY) {
 				if (player->getLobby() != nullptr)
-					sendToAll(relayPacket, player->getLobby()->getPlayers(), player);
+					Player::sendToAll(relayPacket, player->getLobby()->getPlayers(), player);
 			}
 			else if (player->getRoom() != nullptr) {
-				sendToAll(relayPacket, player->getRoom()->getPlayers(), player);
+				Player::sendToAll(relayPacket, player->getRoom()->getPlayers(), player);
 			}
 		}
 		player = nullptr;
@@ -820,7 +806,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 			if (room != nullptr && room->getPlayerCount() >= 2)
 			{
 				// Make sure we ack before anything else
-				send(replyPacket, *player);
+				player->send(replyPacket);
 				replyPacket.reset();
 				// send START_OK
 				INFO_LOG(game, "Sending START_OK to owner");
@@ -829,7 +815,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 				startOk.writeData(0u);	// list: count [int ...]
 				startOk.writeData(tag.full);
 				startOk.flags |= Packet::FLAG_RUDP;
-				send(startOk, *room->getOwner());
+				room->getOwner()->send(startOk);
 			}
 			break;
 		}
@@ -867,7 +853,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 			if (room != nullptr && room->setReady(player))
 			{
 				// Make sure we ack before anything else
-				send(replyPacket, *player);
+				player->send(replyPacket);
 				replyPacket.reset();
 				// send GAME_START
 				INFO_LOG(game, "%s: Sending GAME_START to all players", room->getName().c_str());
@@ -880,7 +866,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 				// wait for this packet to be ack'ed by all players before sending game data
 				// must be called before sending to get the current rel seq#
 				room->startSync();
-				sendToAll(gameStart, room->getPlayers());
+				Player::sendToAll(gameStart, room->getPlayers());
 			}
 			break;
 		}
@@ -909,7 +895,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 			if (room != nullptr && room->setResult(player, &data[0x12]))
 			{
 				// Make sure we ack before anything else
-				send(replyPacket, *player);
+				player->send(replyPacket);
 				replyPacket.reset();
 				// Send RESULT2
 				INFO_LOG(game, "%s: Sending RESULT2 to all players", room->getName().c_str());
@@ -922,7 +908,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 				result2.writeData(tag.full);
 				for (const Room::result_t& result : results)
 					result2.writeData(result.data(), result.size());
-				sendToAll(result2, room->getPlayers());
+				Player::sendToAll(result2, room->getPlayers());
 			}
 			break;
 		}
@@ -940,7 +926,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 				TagCmd tag;
 				tag.command = TagCmd::GAME_OVER;
 				packet.writeData(tag.full);
-				sendToAll(packet, room->getPlayers());
+				Player::sendToAll(packet, room->getPlayers());
 				room->reset();
 			}
 			break;
@@ -1009,7 +995,7 @@ bool Room::removePlayer(Player *player)
 	Packet relay;
 	relay.init(Packet::REQ_LEAVE_LOBBY_ROOM);
 	relay.writeData(player->getId());
-	server.sendToAll(relay, getPlayers());
+	Player::sendToAll(relay, getPlayers());
 
 	/*
 	if (roomState == InGame)
@@ -1022,7 +1008,7 @@ bool Room::removePlayer(Player *player)
 		TagCmd tag;
 		tag.command = 0x12;
 		packet.writeData(tag.full);
-		server.sendToAll(packet, players);
+		Player::sendToAll(packet, players);
 		reset();
 	}
 	*/
@@ -1048,7 +1034,7 @@ bool Room::removePlayer(Player *player)
 			tag.command = TagCmd::START_OK;
 			packet.writeData(tag.full);
 		}
-		server.send(packet, *owner);
+		owner->send(packet);
 	}
 	return false;
 }
@@ -1122,7 +1108,7 @@ void Room::sendGameData(const std::error_code& ec)
 	packet.writeData(getNextFrame());
 	for (const PlayerState& state : playerState)
 		packet.writeData(state.gamedata.data(), state.gamedata.size());
-	server.sendToAll(packet, players);
+	Player::sendToAll(packet, players);
 
 	// send game data every 66.667 ms (4 frames) like the game does
 	if (roomState == InGame) {
@@ -1214,7 +1200,7 @@ void Room::rudpAcked(Player *player)
 			// notify each player of his position in the game
 			tag.id = userId++;
 			write16(sys2.data, 0x14, tag.full);
-			server.send(sys2, *pl);
+			pl->send(sys2);
 		}
 
 		return;
@@ -1231,7 +1217,7 @@ void Room::rudpAcked(Player *player)
 	Packet packet;
 	packet.init(Packet::REQ_CHAT);
 	packet.writeData(0u);	// frame#?
-	server.send(packet, *owner);
+	owner->send(packet);
 }
 
 void Room::openNetdump()
@@ -1303,7 +1289,7 @@ void Lobby::removePlayer(Player *player)
 	relay.init(Packet::REQ_LEAVE_LOBBY_ROOM);
 	relay.flags |= Packet::FLAG_LOBBY;
 	relay.writeData(player->getId());
-	server.sendToAll(relay, players);
+	Player::sendToAll(relay, players);
 }
 
 std::vector<Room *> Lobby::getRooms() const
