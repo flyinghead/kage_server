@@ -190,14 +190,6 @@ public:
 	void writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const;
 
 private:
-	void openNetdump();
-	void sendGameData(const std::error_code& ec);
-
-	void closeNetdump() {
-		if (netdump != nullptr)
-			fclose(netdump);
-	}
-
 	struct PlayerState
 	{
 		enum State {
@@ -207,12 +199,22 @@ private:
 			Ready,		// READY received
 			Started,	// START_GAME is ack'ed
 			Result,		// RESULT received
+			Gone,		// player left
 		};
 		State state;
 		sysdata_t sysdata;
 		std::array<uint8_t, 18> gamedata;
 		result_t result;
 	};
+
+	void openNetdump();
+	void sendGameData(const std::error_code& ec);
+	PlayerState& getPlayerState(unsigned index);
+
+	void closeNetdump() {
+		if (netdump != nullptr)
+			fclose(netdump);
+	}
 
 	Lobby& lobby;
 	const uint32_t id;

@@ -495,35 +495,43 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				}
 				else
 				{
+					if (room->getAttributes() & 0xc0000000)
+					{
+						// Room locked or in game
+						replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
+						replyPacket.ack(read32(data, 8));
+						// 9 is "room locked"
+						replyPacket.writeData(9u);
+						INFO_LOG(game, "%s join room failed: room locked", player->getName().c_str());
+						break;
+					}
 					std::string password = (const char *)&data[0x18];
 					if (password != room->getPassword())
 					{
 						replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
 						replyPacket.ack(read32(data, 8));
-						// 0xF is incorrect password, 9 room locked
+						// 0xF is incorrect password
 						replyPacket.writeData(0xfu);
 						INFO_LOG(game, "%s join room failed: incorrect password", player->getName().c_str());
+						break;
 					}
-					else
-					{
-						room->addPlayer(player);
+					room->addPlayer(player);
 
-						// Notify other players
-						relayPacket.init(Packet::REQ_JOIN_LOBBY_ROOM);
-						relayPacket.writeData(player->getName().c_str(), 0x10);
-						relayPacket.writeData(player->getId());
-						relayPacket.writeData(0u);	// controllers
+					// Notify other players
+					relayPacket.init(Packet::REQ_JOIN_LOBBY_ROOM);
+					relayPacket.writeData(player->getName().c_str(), 0x10);
+					relayPacket.writeData(player->getId());
+					relayPacket.writeData(0u);	// controllers
 
-						replyPacket.respOK(Packet::REQ_JOIN_LOBBY_ROOM);
-						replyPacket.writeData(room->getId());
-						replyPacket.ack(read32(data, 8));
+					replyPacket.respOK(Packet::REQ_JOIN_LOBBY_ROOM);
+					replyPacket.writeData(room->getId());
+					replyPacket.ack(read32(data, 8));
 
-						// Push room status to new player
-						replyPacket.init(Packet::REQ_CHG_ROOM_STATUS);
-						replyPacket.writeData(room->getId());
-						replyPacket.writeData("STAT", 4);
-						replyPacket.writeData(room->getAttributes());
-					}
+					// Push room status to new player
+					replyPacket.init(Packet::REQ_CHG_ROOM_STATUS);
+					replyPacket.writeData(room->getId());
+					replyPacket.writeData("STAT", 4);
+					replyPacket.writeData(room->getAttributes());
 				}
 			}
 			break;
@@ -983,14 +991,29 @@ void Room::addPlayer(Player *player)
 bool Room::removePlayer(Player *player)
 {
 	player->setRoom(nullptr);
-	for (auto it = players.begin(); it != players.end(); ++it)
-		if (player == *it) {
-			INFO_LOG(game, "%s left room %s", player->getName().c_str(), name.c_str());
-			players.erase(it);
-			break;
-		}
+	int i = getPlayerIndex(player);
+	if (i < 0) {
+		ERROR_LOG(server.game, "Player %s to remove not found in the room", player->getName().c_str());
+		return false;
+	}
+	if (roomState == SyncStarted)
+	{
+		PlayerState& state = getPlayerState(i);
+		if (state.state == PlayerState::Ready)
+			// Allow the game to start
+			rudpAcked(player);
+		state.state = PlayerState::Gone;
+	}
+	else if (roomState == InGame)
+	{
+		PlayerState& state = getPlayerState(i);
+		state.state = PlayerState::Gone;
+	}
+	INFO_LOG(game, "%s left room %s", player->getName().c_str(), name.c_str());
+	players.erase(players.begin() + i);
 	if (players.empty())
 		return true;
+
 	// Notify other players
 	Packet relay;
 	relay.init(Packet::REQ_LEAVE_LOBBY_ROOM);
@@ -1055,8 +1078,9 @@ void Room::setSysData(const Player *player, const sysdata_t& sysdata)
 		WARN_LOG(game, "setSysData: player not found in room");
 		return;
 	}
-	playerState[i].sysdata = sysdata;
-	playerState[i].state = PlayerState::SysData;
+	PlayerState& state = getPlayerState(i);
+	state.sysdata = sysdata;
+	state.state = PlayerState::SysData;
 }
 
 bool Room::setReady(const Player *player)
@@ -1066,9 +1090,10 @@ bool Room::setReady(const Player *player)
 		WARN_LOG(game, "setReady: player not found in room");
 		return false;
 	}
-	playerState[i].state = PlayerState::Ready;
+	PlayerState& thisState = getPlayerState(i);
+	thisState.state = PlayerState::Ready;
 	for (const auto& state : playerState)
-		if (state.state != PlayerState::Ready)
+		if (state.state != PlayerState::Ready && state.state != PlayerState::Gone)
 			return false;
 	return true;
 }
@@ -1088,12 +1113,27 @@ int Room::getPlayerIndex(const Player *player)
 		return i;
 }
 
+Room::PlayerState& Room::getPlayerState(unsigned index)
+{
+	for (unsigned i = 0; i < playerState.size(); i++)
+	{
+		if (playerState[i].state == PlayerState::Gone)
+			// ignore players who have left the game
+			continue;
+		if (index == 0)
+			return playerState[i];
+		index--;
+	}
+	abort();
+}
+
 void Room::setGameData(const Player *player, const uint8_t *data)
 {
 	int i = getPlayerIndex(player);
 	if (i < 0)
 		return;
-	memcpy(playerState[i].gamedata.data(), data, playerState[i].gamedata.size());
+	PlayerState& state = getPlayerState(i);
+	memcpy(state.gamedata.data(), data, state.gamedata.size());
 	if (roomState != InGame)
 		sendGameData({});
 }
@@ -1124,7 +1164,7 @@ void Room::sendGameData(const std::error_code& ec)
 std::vector<Room::result_t> Room::getResults() const
 {
 	std::vector<result_t> results;
-	results.reserve(this->playerState.size());
+	results.reserve(playerState.size());
 	for (const PlayerState& state : playerState)
 		results.push_back(state.result);
 	return results;
@@ -1135,10 +1175,11 @@ bool Room::setResult(const Player *player, const uint8_t *data)
 	int i = getPlayerIndex(player);
 	if (i < 0)
 		return false;
-	memcpy(playerState[i].result.data(), data, playerState[i].result.size());
-	playerState[i].state = PlayerState::Result;
+	PlayerState& thisState = getPlayerState(i);
+	memcpy(thisState.result.data(), data, thisState.result.size());
+	thisState.state = PlayerState::Result;
 	for (const PlayerState& state : playerState)
-		if (state.state != PlayerState::Result)
+		if (state.state != PlayerState::Result && state.state != PlayerState::Gone)
 			return false;
 	endGame();
 	return true;
@@ -1174,7 +1215,7 @@ void Room::rudpAcked(Player *player)
 	int i = getPlayerIndex(player);
 	if (i < 0)
 		return;
-	PlayerState::State& state = playerState[i].state;
+	PlayerState::State& state = getPlayerState(i).state;
 	if (state == PlayerState::SysData)
 	{
 		state = PlayerState::SysOk;
@@ -1211,7 +1252,7 @@ void Room::rudpAcked(Player *player)
 	state = PlayerState::Started;
 	INFO_LOG(game, "%s: GAME_START ack'ed by %s", name.c_str(), player->getName().c_str());
 	for (const PlayerState& pstate : playerState)
-		if (pstate.state != PlayerState::Started)
+		if (pstate.state != PlayerState::Started && pstate.state != PlayerState::Gone)
 			return;
 	// send empty UDP data to owner to kick start the game
 	Packet packet;
