@@ -121,6 +121,13 @@ private:
 class Room
 {
 public:
+	static constexpr uint32_t SERVER_READY = 0x00000001;
+	static constexpr uint32_t PASSSWORD = 0x01000000;
+	static constexpr uint32_t TEAM = 0x02000000;
+	// 04000000: can start?
+	static constexpr uint32_t LOCKED = 0x40000000;
+	static constexpr uint32_t PLAYING = 0x80000000;
+
 	Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context);
 	~Room();
 
@@ -210,6 +217,7 @@ private:
 	void openNetdump();
 	void sendGameData(const std::error_code& ec);
 	PlayerState& getPlayerState(unsigned index);
+	void sendGameOver();
 
 	void closeNetdump() {
 		if (netdump != nullptr)
@@ -219,19 +227,20 @@ private:
 	Lobby& lobby;
 	const uint32_t id;
 	std::string name;
-	uint32_t attributes;	// 80000000: playing, 40000000: locked, 04000000: can start?, 01000000: password, 1: server started/ready
-							// c0000000 => start game
+	uint32_t attributes;
 	Player *owner;
 	uint32_t maxPlayers = 0;
 	std::string password;
 	uint16_t frameNum = 0;
-	enum { Init, SyncStarted, InGame, Result } roomState = Init;
+	enum { Init, SyncStarted, InGame, GameOver, Result } roomState = Init;
 	std::vector<Player *> players;
 	std::vector<PlayerState> playerState;
 	asio::steady_timer timer;
 	LobbyServer& server;
 	const Game game;
 	FILE *netdump = nullptr;
+	asio::steady_timer timeLimit;
+	int pointLimit = 0;
 };
 
 class Lobby

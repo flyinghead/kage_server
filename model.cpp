@@ -23,6 +23,8 @@
 
 using namespace std::chrono_literals;
 
+constexpr int TimeLimits[] { 120, 140, 160, 180, 200, 220, 240, 260, 280, 300, 360, 420, 480, 600, 900, 1200, -1 };
+
 void Player::setAlive() {
 	lastTime = Clock::now();
 }
@@ -607,7 +609,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			}
 			else
 			{
-				attributes |= 1;	// server ready?
+				attributes |= Room::SERVER_READY;
 				Room *room = player->getLobby()->addRoom(name, attributes, player, io_context);
 				room->setMaxPlayers(maxPlayers);
 				room->setPassword(password);
@@ -953,7 +955,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 
 Room::Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
 	: lobby(lobby), id(id), name(name), attributes(attributes),
-	  owner(owner), timer(io_context), server(lobby.getServer()), game(server.game)
+	  owner(owner), timer(io_context), server(lobby.getServer()), game(server.game), timeLimit(io_context)
 {
 	assert(name.length() <= 16);
 	addPlayer(owner);
@@ -968,9 +970,39 @@ Room::~Room() {
 void Room::setAttributes(uint32_t attributes)
 {
 	INFO_LOG(game, "Room %s status set to %08x", name.c_str(), attributes);
-	if ((attributes & 0x80000000) != 0 && (this->attributes & 0x80000000) == 0)
+	if ((attributes & PLAYING) != 0 && (this->attributes & PLAYING) == 0) {
 		// reset when starting a game
 		reset();
+	}
+	else if (roomState == InGame
+			&& (attributes & (PLAYING | LOCKED)) == PLAYING
+			&& (this->attributes & (PLAYING | LOCKED)) == (PLAYING | LOCKED))
+	{
+		// Start the time limit timer when the owner unlocks the room
+		// time limit at offset 0xd in owner's sysdata
+		int limit = TimeLimits[playerState[0].sysdata[0xd] & 0xf];
+		std::error_code ec;
+		timeLimit.cancel(ec);
+		if (limit > 0)
+		{
+			timeLimit.expires_after(std::chrono::seconds(limit));
+			timeLimit.async_wait([this](const std::error_code& ec)
+			{
+				if (ec)
+					return;
+				// Send game_over to all players
+				INFO_LOG(server.game, "%s: time limit reached", name.c_str());
+				sendGameOver();
+			});
+		}
+		// match points at offset 3, point limit flag at offset 2 bit 4
+		if (playerState[0].sysdata[2] & 0x10)
+			pointLimit = (playerState[0].sysdata[3] >> 2) & 0x3f;
+		else
+			pointLimit = 0;
+		INFO_LOG(server.game, "%s: Game started: time limit %d'%02d point limit %d",
+				name.c_str(), limit / 60, limit % 60, pointLimit);
+	}
 	this->attributes = attributes;
 }
 
@@ -1020,21 +1052,6 @@ bool Room::removePlayer(Player *player)
 	relay.writeData(player->getId());
 	Player::sendToAll(relay, getPlayers());
 
-	/*
-	if (roomState == InGame)
-	{
-		// Send game_over to all players?
-		// FIXME works but somewhat corrupts the connection (and not owner)
-		Packet packet;
-		packet.init(Packet::REQ_CHAT);
-		packet.flags |= Packet::FLAG_RUDP;
-		TagCmd tag;
-		tag.command = 0x12;
-		packet.writeData(tag.full);
-		Player::sendToAll(packet, players);
-		reset();
-	}
-	*/
 	if (owner == player)
 	{
 		// Select new owner and notify him
@@ -1134,8 +1151,20 @@ void Room::setGameData(const Player *player, const uint8_t *data)
 		return;
 	PlayerState& state = getPlayerState(i);
 	memcpy(state.gamedata.data(), data, state.gamedata.size());
-	if (roomState != InGame)
+	if (roomState == SyncStarted)
 		sendGameData({});
+	// 114 seems to be the max score you can have in game.
+	// However the correct score is displayed on the result screen.
+	if (pointLimit > 0 && data[8] <= 0xf6)
+	{
+		int score = (int)data[8] / 2 - 9;
+		if (score >= pointLimit && roomState == InGame)
+		{
+			// Send game_over to all players
+			INFO_LOG(server.game, "%s: point limit %d reached by %s", name.c_str(), pointLimit, player->getName().c_str());
+			sendGameOver();
+		}
+	}
 }
 
 void Room::sendGameData(const std::error_code& ec)
@@ -1151,14 +1180,26 @@ void Room::sendGameData(const std::error_code& ec)
 	Player::sendToAll(packet, players);
 
 	// send game data every 66.667 ms (4 frames) like the game does
-	if (roomState == InGame) {
-		timer.expires_at(timer.expiry() + 66667us);
-	}
-	else {
+	if (roomState == SyncStarted) {
 		timer.expires_after(66667us);
 		roomState = InGame;
 	}
+	else {
+		timer.expires_at(timer.expiry() + 66667us);
+	}
 	timer.async_wait(std::bind(&Room::sendGameData, this, asio::placeholders::error));
+}
+
+void Room::sendGameOver()
+{
+	Packet packet;
+	packet.init(Packet::REQ_CHAT);
+	packet.flags |= Packet::FLAG_RUDP;
+	TagCmd tag;
+	tag.command = TagCmd::GAME_OVER;
+	packet.writeData(tag.full);
+	Player::sendToAll(packet, players);
+	roomState = GameOver;
 }
 
 std::vector<Room::result_t> Room::getResults() const
@@ -1194,6 +1235,7 @@ void Room::reset()
 	roomState = Init;
 	std::error_code ec;
 	timer.cancel(ec);
+	timeLimit.cancel(ec);
 }
 
 void Room::startSync()
@@ -1207,6 +1249,7 @@ void Room::endGame()
 {
 	std::error_code ec;
 	timer.cancel(ec);
+	timeLimit.cancel(ec);
 	roomState = Result;
 }
 

@@ -22,6 +22,8 @@
 #include <stdexcept>
 #include <arpa/inet.h>
 
+void dumpData(const uint8_t *data, size_t len);
+
 enum class Game
 {
 	None = -1,
