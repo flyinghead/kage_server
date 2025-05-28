@@ -23,8 +23,6 @@
 
 using namespace std::chrono_literals;
 
-constexpr int TimeLimits[] { 120, 140, 160, 180, 200, 220, 240, 260, 280, 300, 360, 420, 480, 600, 900, 1200, -1 };
-
 void Player::setAlive() {
 	lastTime = Clock::now();
 }
@@ -165,110 +163,6 @@ void Server::read()
 			handlePacketDone();
 			read();
 		});
-}
-
-void BootstrapServer::start()
-{
-	bombermanServer.start();
-	outtriggerServer.start();
-	propellerServer.start();
-	Server::start();
-}
-
-void BootstrapServer::handlePacket(const uint8_t *data, size_t len)
-{
-	DEBUG_LOG(Game::None, "Bootstrap: Packet: flags/size %02x %02x command %02x %02x", data[0], data[1], data[2], data[3]);
-	Packet packet;
-	switch (data[3])
-	{
-	case Packet::REQ_BOOTSTRAP_LOGIN:
-		{
-			/* Using 2D and blowfish encryption (works with outtrigger)
-			packet.init(Packet::RSP_LOGIN_SUCCESS, &data[4]);
-			packet.writeData(&data[0x10], 0x28);
-			// FIXME auto addr = socket.local_endpoint().address().to_v4().to_bytes();
-			std::array<uint8_t, 4>addr { 192, 168, 1, 31 };
-			packet.writeData((uint8_t *)addr.data(), addr.size());
-			packet.writeData((uint32_t)socket.local_endpoint().port());
-			packet.writeData(0u);
-			packet.writeData(0u);
-			packet.writeData(0u); // size of following data, sent back when logging to lobby
-			packet.size = ((packet.size + 7) / 8) * 8;
-			BLOWFISH_CTX *ctx = new BLOWFISH_CTX();
-			Blowfish_Init(ctx, (uint8_t *)OuttriggerKey, strlen(OuttriggerKey));
-			for (int i = 0x10; i < packet.size; i += 8)
-			{
-				uint32_t *x = (uint32_t *)&packet.data[i];
-				x[0] = ntohl(x[0]);
-				x[1] = ntohl(x[1]);
-				Blowfish_Encrypt(ctx, x, x + 1);
-				x[0] = htonl(x[0]);
-				x[1] = htonl(x[1]);
-			}
-			*/
-			uint16_t port = OUTTRIGGER_PORT;
-			LobbyServer *server = &outtriggerServer;
-			std::string name;
-			if (!strcmp((const char *)&data[0x10], "BombermanOnline"))
-			{
-				port = BOMBERMAN_PORT;
-				server = &bombermanServer;
-				name = (const char *)&data[0x38];
-				auto sep = name.find('\1');
-				if (sep != std::string::npos)
-					// get rid of the password
-					name = name.substr(0, sep);
-			}
-			else if (!strcmp((const char *)&data[0x10], "PropellerA"))
-			{
-				port = PROPELLERA_PORT;
-				server = &propellerServer;
-				name = (const char *)&data[0x38];	// FIXME this is the game key but no user name
-			}
-			else {
-				// Outtrigger
-				name = (const char *)&data[0x10];
-			}
-
-			uint32_t tmpUserId = read32(data, 4);
-
-			// Using 29 (shu)
-			packet.init(Packet::RSP_LOGIN_SUCCESS2);
-			packet.writeData((uint32_t)port);
-			packet.writeData(0u);	// ?
-			packet.writeData(nextUserId);
-
-			Player *player = new Player(*server, source, nextUserId, io_context);
-			player->setName(name);
-			server->addPlayer(player);
-			nextUserId++;
-
-			size_t pktsize = packet.finalize();
-			write32(packet.data, 4, tmpUserId);
-			write32(packet.data, 8, player->getUnrelSeqAndInc());
-			std::error_code ec2;
-			socket.send_to(asio::buffer(packet.data, pktsize), source, 0, ec2);
-			break;
-		}
-
-	case Packet::REQ_PING:
-		{
-			packet.respOK(Packet::REQ_PING);
-			packet.writeData(read32(data, 0x10));
-			size_t pktsize = packet.finalize();
-			write32(packet.data, 4, read32(data, 4));
-			std::error_code ec2;
-			socket.send_to(asio::buffer(packet.data, pktsize), source, 0, ec2);
-			break;
-		}
-
-	case Packet::REQ_NOP:
-		break;
-
-	default:
-		ERROR_LOG(Game::None, "Bootstrap: Unhandled msg type %x", data[3]);
-		break;
-	}
 }
 
 LobbyServer::LobbyServer(Game game, uint16_t port, asio::io_context& io_context)
@@ -440,7 +334,8 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					if (room == nullptr) {
 						replyPacket.writeData(0u);	// user count
 					}
-					else {
+					else
+					{
 						const std::vector<Player *> players = room->getPlayers();
 						replyPacket.writeData(room->getPlayerCount());
 						for (Player *pl : players)
@@ -610,7 +505,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			else
 			{
 				attributes |= Room::SERVER_READY;
-				Room *room = player->getLobby()->addRoom(name, attributes, player, io_context);
+				Room *room = addRoom(name, attributes, player);
 				room->setMaxPlayers(maxPlayers);
 				room->setPassword(password);
 
@@ -720,7 +615,6 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				replyPacket.respOK(Packet::REQ_PING);
 				// outtrigger and propA send a single value (clock)
 				replyPacket.writeData(read32(data, 0x10));
-				//packet.writeData(&data[0x10], (read16(data, 0) & 0x3ff) - 0x10);
 			}
 			else {
 				// sends 4 ints, not sure what should be returned
@@ -786,176 +680,18 @@ void LobbyServer::dump(const uint8_t* data, size_t len)
 		player->getRoom()->writeNetdump(data, len, source);
 }
 
-bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t len)
+Room *LobbyServer::addRoom(const std::string& name, uint32_t attributes, Player *owner)
 {
-	uint16_t flags = read16(data, 0);
-	if (flags & Packet::FLAG_ACK)
-		player->ackRUdp(read32(data, 0xc));
+	uint32_t id = nextRoomId++;
+	Room *room = new Room(*owner->getLobby(), id, name, attributes, owner, io_context);
+	owner->getLobby()->addRoom(room);
 
-	if (data[3] != Packet::REQ_GAME_DATA)
-		return false;
-
-	TagCmd tag(read16(data, 0x10));
-	switch (tag.command)
-	{
-	case TagCmd::ECHO:
-		// called regularly (< 10s) by all players in the room
-		//printf("tag: ECHO\n");
-		replyPacket.init(Packet::RSP_TAG_CMD);
-		replyPacket.writeData(0u);
-		replyPacket.writeData(&data[0x10], 4);
-		break;
-
-	case TagCmd::START_OK:
-		{
-			INFO_LOG(game, "tag: START OK");
-			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
-
-			Room *room = player->getRoom();
-			if (room != nullptr && room->getPlayerCount() >= 2)
-			{
-				// Make sure we ack before anything else
-				player->send(replyPacket);
-				replyPacket.reset();
-				// send START_OK
-				INFO_LOG(game, "Sending START_OK to owner");
-				Packet startOk;
-				startOk.init(Packet::RSP_TAG_CMD);
-				startOk.writeData(0u);	// list: count [int ...]
-				startOk.writeData(tag.full);
-				startOk.flags |= Packet::FLAG_RUDP;
-				room->getOwner()->send(startOk);
-			}
-			break;
-		}
-
-	case TagCmd::SYS:
-		{
-			INFO_LOG(game, "tag: SYS from %s", player->getName().c_str());
-			replyPacket.init(Packet::RSP_TAG_CMD);
-			replyPacket.ack(read32(data, 8));
-			replyPacket.flags |= Packet::FLAG_RUDP;
-			replyPacket.writeData(0u);	// list: count [int ...]
-			TagCmd tag;
-			tag.command = TagCmd::SYS_OK;
-			replyPacket.writeData(tag.full);
-			// FIXME what if SYS_OK has already been sent and ack'ed once?
-			player->notifyRoomOnAck();
-
-			Room *room = player->getRoom();
-			if (room != nullptr)
-			{
-				Room::sysdata_t sysdata;
-				memcpy(sysdata.data(), &data[0x12], sysdata.size());
-				room->setSysData(player, sysdata);
-			}
-			break;
-		}
-
-	case TagCmd::READY:
-		{
-			INFO_LOG(game, "tag: READY from %s", player->getName().c_str());
-			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
-
-			Room *room = player->getRoom();
-			if (room != nullptr && room->setReady(player))
-			{
-				// Make sure we ack before anything else
-				player->send(replyPacket);
-				replyPacket.reset();
-				// send GAME_START
-				INFO_LOG(game, "%s: Sending GAME_START to all players", room->getName().c_str());
-				Packet gameStart;
-				gameStart.init(Packet::REQ_CHAT);
-				gameStart.flags |= Packet::FLAG_RUDP;
-				TagCmd tag;
-				tag.command = TagCmd::GAME_START;
-				gameStart.writeData(tag.full);
-				// wait for this packet to be ack'ed by all players before sending game data
-				// must be called before sending to get the current rel seq#
-				room->startSync();
-				Player::sendToAll(gameStart, room->getPlayers());
-			}
-			break;
-		}
-
-	case TagCmd::SYNC:	// actual game data
-		{
-			//DEBUG_LOG(game, "tag: SYNC from %s", player->getName().c_str());
-			if (data[0] & 0x80) {
-				// propA sends rel SYNC after creating room
-				replyPacket.init(Packet::REQ_NOP);
-				replyPacket.ack(read32(data, 8));
-			}
-			Room *room = player->getRoom();
-			if (room != nullptr)
-				room->setGameData(player, &data[0x12]);
-			break;
-		}
-
-	case TagCmd::RESULT:
-		{
-			INFO_LOG(game, "tag: RESULT from %s", player->getName().c_str());
-			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
-
-			Room *room = player->getRoom();
-			if (room != nullptr && room->setResult(player, &data[0x12]))
-			{
-				// Make sure we ack before anything else
-				player->send(replyPacket);
-				replyPacket.reset();
-				// Send RESULT2
-				INFO_LOG(game, "%s: Sending RESULT2 to all players", room->getName().c_str());
-				std::vector<Room::result_t> results  = room->getResults();
-				Packet result2;
-				result2.init(Packet::REQ_CHAT);
-				result2.flags |= Packet::FLAG_RUDP;
-				TagCmd tag;
-				tag.command = TagCmd::RESULT2;
-				result2.writeData(tag.full);
-				for (const Room::result_t& result : results)
-					result2.writeData(result.data(), result.size());
-				Player::sendToAll(result2, room->getPlayers());
-			}
-			break;
-		}
-
-	case TagCmd::RESET:
-		{
-			WARN_LOG(game, "tag: RESET from %s", player->getName().c_str());
-			Room *room = player->getRoom();
-			if (room != nullptr)
-			{
-				// Send game_over to all players?
-				Packet packet;
-				packet.init(Packet::REQ_CHAT);
-				packet.flags |= Packet::FLAG_RUDP;
-				TagCmd tag;
-				tag.command = TagCmd::GAME_OVER;
-				packet.writeData(tag.full);
-				Player::sendToAll(packet, room->getPlayers());
-				room->reset();
-			}
-			break;
-		}
-
-	case TagCmd::TIME_OUT:
-		WARN_LOG(game, "tag: TIME OUT from %s", player->getName().c_str());
-		break;
-
-	default:
-		ERROR_LOG(game, "Unhandled tag command: %x (tag %04x)", tag.command, tag.full);
-		break;
-	}
-	return true;
+	return room;
 }
 
 Room::Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
 	: lobby(lobby), id(id), name(name), attributes(attributes),
-	  owner(owner), timer(io_context), server(lobby.getServer()), game(server.game), timeLimit(io_context)
+	  owner(owner), server(lobby.getServer()), game(server.game)
 {
 	assert(name.length() <= 16);
 	addPlayer(owner);
@@ -965,45 +701,6 @@ Room::Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attribut
 Room::~Room() {
 	closeNetdump();
 	INFO_LOG(game, "Room %s was deleted", name.c_str());
-}
-
-void Room::setAttributes(uint32_t attributes)
-{
-	INFO_LOG(game, "Room %s status set to %08x", name.c_str(), attributes);
-	if ((attributes & PLAYING) != 0 && (this->attributes & PLAYING) == 0) {
-		// reset when starting a game
-		reset();
-	}
-	else if (roomState == InGame
-			&& (attributes & (PLAYING | LOCKED)) == PLAYING
-			&& (this->attributes & (PLAYING | LOCKED)) == (PLAYING | LOCKED))
-	{
-		// Start the time limit timer when the owner unlocks the room
-		// time limit at offset 0xd in owner's sysdata
-		int limit = TimeLimits[playerState[0].sysdata[0xd] & 0xf];
-		std::error_code ec;
-		timeLimit.cancel(ec);
-		if (limit > 0)
-		{
-			timeLimit.expires_after(std::chrono::seconds(limit));
-			timeLimit.async_wait([this](const std::error_code& ec)
-			{
-				if (ec)
-					return;
-				// Send game_over to all players
-				INFO_LOG(server.game, "%s: time limit reached", name.c_str());
-				sendGameOver();
-			});
-		}
-		// match points at offset 3, point limit flag at offset 2 bit 4
-		if (playerState[0].sysdata[2] & 0x10)
-			pointLimit = (playerState[0].sysdata[3] >> 2) & 0x3f;
-		else
-			pointLimit = 0;
-		INFO_LOG(server.game, "%s: Game started: time limit %d'%02d point limit %d",
-				name.c_str(), limit / 60, limit % 60, pointLimit);
-	}
-	this->attributes = attributes;
 }
 
 void Room::addPlayer(Player *player)
@@ -1028,19 +725,8 @@ bool Room::removePlayer(Player *player)
 		ERROR_LOG(server.game, "Player %s to remove not found in the room", player->getName().c_str());
 		return false;
 	}
-	if (roomState == SyncStarted)
-	{
-		PlayerState& state = getPlayerState(i);
-		if (state.state == PlayerState::Ready)
-			// Allow the game to start
-			rudpAcked(player);
-		state.state = PlayerState::Gone;
-	}
-	else if (roomState == InGame)
-	{
-		PlayerState& state = getPlayerState(i);
-		state.state = PlayerState::Gone;
-	}
+	onRemovePlayer(player, i);
+
 	INFO_LOG(game, "%s left room %s", player->getName().c_str(), name.c_str());
 	players.erase(players.begin() + i);
 	if (players.empty())
@@ -1079,42 +765,6 @@ bool Room::removePlayer(Player *player)
 	return false;
 }
 
-std::vector<Room::sysdata_t> Room::getSysData() const
-{
-	std::vector<sysdata_t> sysdata;
-	sysdata.reserve(playerState.size());
-	for (const auto& state : playerState)
-		sysdata.push_back(state.sysdata);
-	return sysdata;
-}
-
-void Room::setSysData(const Player *player, const sysdata_t& sysdata)
-{
-	int i = getPlayerIndex(player);
-	if (i < 0) {
-		WARN_LOG(game, "setSysData: player not found in room");
-		return;
-	}
-	PlayerState& state = getPlayerState(i);
-	state.sysdata = sysdata;
-	state.state = PlayerState::SysData;
-}
-
-bool Room::setReady(const Player *player)
-{
-	int i = getPlayerIndex(player);
-	if (i < 0) {
-		WARN_LOG(game, "setReady: player not found in room");
-		return false;
-	}
-	PlayerState& thisState = getPlayerState(i);
-	thisState.state = PlayerState::Ready;
-	for (const auto& state : playerState)
-		if (state.state != PlayerState::Ready && state.state != PlayerState::Gone)
-			return false;
-	return true;
-}
-
 int Room::getPlayerIndex(const Player *player)
 {
 	unsigned i = 0;
@@ -1128,180 +778,6 @@ int Room::getPlayerIndex(const Player *player)
 		return -1;
 	else
 		return i;
-}
-
-Room::PlayerState& Room::getPlayerState(unsigned index)
-{
-	for (unsigned i = 0; i < playerState.size(); i++)
-	{
-		if (playerState[i].state == PlayerState::Gone)
-			// ignore players who have left the game
-			continue;
-		if (index == 0)
-			return playerState[i];
-		index--;
-	}
-	abort();
-}
-
-void Room::setGameData(const Player *player, const uint8_t *data)
-{
-	int i = getPlayerIndex(player);
-	if (i < 0)
-		return;
-	PlayerState& state = getPlayerState(i);
-	memcpy(state.gamedata.data(), data, state.gamedata.size());
-	if (roomState == SyncStarted)
-		sendGameData({});
-	// 114 seems to be the max score you can have in game.
-	// However the correct score is displayed on the result screen.
-	if (pointLimit > 0 && data[8] <= 0xf6)
-	{
-		int score = (int)data[8] / 2 - 9;
-		if (score >= pointLimit && roomState == InGame)
-		{
-			// Send game_over to all players
-			INFO_LOG(server.game, "%s: point limit %d reached by %s", name.c_str(), pointLimit, player->getName().c_str());
-			sendGameOver();
-		}
-	}
-}
-
-void Room::sendGameData(const std::error_code& ec)
-{
-	if (ec)
-		return;
-
-	Packet packet;
-	packet.init(Packet::REQ_CHAT);
-	packet.writeData(getNextFrame());
-	for (const PlayerState& state : playerState)
-		packet.writeData(state.gamedata.data(), state.gamedata.size());
-	Player::sendToAll(packet, players);
-
-	// send game data every 66.667 ms (4 frames) like the game does
-	if (roomState == SyncStarted) {
-		timer.expires_after(66667us);
-		roomState = InGame;
-	}
-	else {
-		timer.expires_at(timer.expiry() + 66667us);
-	}
-	timer.async_wait(std::bind(&Room::sendGameData, this, asio::placeholders::error));
-}
-
-void Room::sendGameOver()
-{
-	Packet packet;
-	packet.init(Packet::REQ_CHAT);
-	packet.flags |= Packet::FLAG_RUDP;
-	TagCmd tag;
-	tag.command = TagCmd::GAME_OVER;
-	packet.writeData(tag.full);
-	Player::sendToAll(packet, players);
-	roomState = GameOver;
-}
-
-std::vector<Room::result_t> Room::getResults() const
-{
-	std::vector<result_t> results;
-	results.reserve(playerState.size());
-	for (const PlayerState& state : playerState)
-		results.push_back(state.result);
-	return results;
-}
-
-bool Room::setResult(const Player *player, const uint8_t *data)
-{
-	int i = getPlayerIndex(player);
-	if (i < 0)
-		return false;
-	PlayerState& thisState = getPlayerState(i);
-	memcpy(thisState.result.data(), data, thisState.result.size());
-	thisState.state = PlayerState::Result;
-	for (const PlayerState& state : playerState)
-		if (state.state != PlayerState::Result && state.state != PlayerState::Gone)
-			return false;
-	endGame();
-	return true;
-}
-
-void Room::reset()
-{
-	playerState.resize(players.size());
-	for (auto& state : playerState)
-		state.state = PlayerState::Init;
-	frameNum = 0;
-	roomState = Init;
-	std::error_code ec;
-	timer.cancel(ec);
-	timeLimit.cancel(ec);
-}
-
-void Room::startSync()
-{
-	roomState = SyncStarted;
-	for (Player *pl : players)
-		pl->notifyRoomOnAck();
-}
-
-void Room::endGame()
-{
-	std::error_code ec;
-	timer.cancel(ec);
-	timeLimit.cancel(ec);
-	roomState = Result;
-}
-
-void Room::rudpAcked(Player *player)
-{
-	int i = getPlayerIndex(player);
-	if (i < 0)
-		return;
-	PlayerState::State& state = getPlayerState(i).state;
-	if (state == PlayerState::SysData)
-	{
-		state = PlayerState::SysOk;
-		for (const PlayerState& pstate : playerState)
-			if (pstate.state != PlayerState::SysOk)
-				return;
-		// send SYS2
-		INFO_LOG(game, "%s: Sending SYS2 to all players", name.c_str());
-		std::vector<Room::sysdata_t> sysdata  = getSysData();
-		Packet sys2;
-		sys2.init(Packet::RSP_TAG_CMD);
-		sys2.flags |= Packet::FLAG_RUDP;
-		sys2.writeData(0u);	// list: count [int ...]
-		TagCmd tag;
-		tag.command = TagCmd::SYS2;
-		tag.player = (uint16_t)sysdata.size();
-		sys2.writeData(tag.full);
-		for (const Room::sysdata_t& data : sysdata)
-			sys2.writeData(data.data(), data.size());
-		uint16_t userId = 0;
-		for (Player *pl : players)
-		{
-			// notify each player of his position in the game
-			tag.id = userId++;
-			write16(sys2.data, 0x14, tag.full);
-			pl->send(sys2);
-		}
-
-		return;
-	}
-
-	if (roomState != SyncStarted || state != PlayerState::Ready)
-		return;
-	state = PlayerState::Started;
-	INFO_LOG(game, "%s: GAME_START ack'ed by %s", name.c_str(), player->getName().c_str());
-	for (const PlayerState& pstate : playerState)
-		if (pstate.state != PlayerState::Started && pstate.state != PlayerState::Gone)
-			return;
-	// send empty UDP data to owner to kick start the game
-	Packet packet;
-	packet.init(Packet::REQ_CHAT);
-	packet.writeData(0u);	// frame#?
-	owner->send(packet);
 }
 
 void Room::openNetdump()
@@ -1393,21 +869,17 @@ Room *Lobby::getRoom(uint32_t id) const
 	else
 		return it->second;
 }
-
-Room *Lobby::addRoom(const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
+void Lobby::addRoom(Room *room)
 {
-	uint32_t id = nextRoomId++;
-	Room *room = new Room(*this, id, name, attributes, owner, io_context);
-	rooms[id] = room;
+	rooms[room->getId()] = room;
 	// Discord presence
 	std::vector<std::string> lobbyUsers;
 	lobbyUsers.reserve(players.size());
+	Player *owner = room->getOwner();
 	for (Player *pl : players)
 		if (pl != owner)
 			lobbyUsers.push_back(pl->getName());
 	discordGameCreated(server.game, owner->getName(), name, lobbyUsers);
-
-	return room;
 }
 
 void Lobby::removeRoom(Room *room) {

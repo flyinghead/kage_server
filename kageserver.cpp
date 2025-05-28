@@ -19,6 +19,7 @@
 #include "propa_auth.h"
 #include "propa_rank.h"
 #include "model.h"
+#include "outtrigger.h"
 #include "discord.h"
 #include "log.h"
 #include "asio.h"
@@ -27,6 +28,141 @@
 #include <sstream>
 
 static std::map<std::string, std::string> Config;
+
+class BootstrapServer : public Server
+{
+public:
+	BootstrapServer(uint16_t port, asio::io_context& io_context)
+		: Server(port, io_context),
+		  bombermanServer(Game::Bomberman, BOMBERMAN_PORT, io_context),
+		  outtriggerServer(OUTTRIGGER_PORT, io_context),
+		  propellerServer(Game::PropellerA, PROPELLERA_PORT, io_context)
+	{
+	}
+
+	void start();
+
+private:
+	void handlePacket(const uint8_t *data, size_t len) override;
+
+	uint32_t nextUserId = 0x1001;
+	LobbyServer bombermanServer;
+	OuttriggerServer outtriggerServer;
+	LobbyServer propellerServer;
+	static constexpr uint16_t BOMBERMAN_PORT = 9091;
+	static constexpr uint16_t OUTTRIGGER_PORT = 9092;
+	static constexpr uint16_t PROPELLERA_PORT = 9093;
+	static constexpr const char *OuttriggerKey = "reggirttuO";
+	static constexpr const char *PropellerKey = "ArelleporP";
+};
+
+void BootstrapServer::start()
+{
+	bombermanServer.start();
+	outtriggerServer.start();
+	propellerServer.start();
+	Server::start();
+}
+
+void BootstrapServer::handlePacket(const uint8_t *data, size_t len)
+{
+	DEBUG_LOG(Game::None, "Bootstrap: Packet: flags/size %02x %02x command %02x %02x", data[0], data[1], data[2], data[3]);
+	Packet packet;
+	switch (data[3])
+	{
+	case Packet::REQ_BOOTSTRAP_LOGIN:
+		{
+			/* Using 2D and blowfish encryption (works with outtrigger)
+			packet.init(Packet::RSP_LOGIN_SUCCESS, &data[4]);
+			packet.writeData(&data[0x10], 0x28);
+			// FIXME auto addr = socket.local_endpoint().address().to_v4().to_bytes();
+			std::array<uint8_t, 4>addr { 192, 168, 1, 31 };
+			packet.writeData((uint8_t *)addr.data(), addr.size());
+			packet.writeData((uint32_t)socket.local_endpoint().port());
+			packet.writeData(0u);
+			packet.writeData(0u);
+			packet.writeData(0u); // size of following data, sent back when logging to lobby
+			packet.size = ((packet.size + 7) / 8) * 8;
+			BLOWFISH_CTX *ctx = new BLOWFISH_CTX();
+			Blowfish_Init(ctx, (uint8_t *)OuttriggerKey, strlen(OuttriggerKey));
+			for (int i = 0x10; i < packet.size; i += 8)
+			{
+				uint32_t *x = (uint32_t *)&packet.data[i];
+				x[0] = ntohl(x[0]);
+				x[1] = ntohl(x[1]);
+				Blowfish_Encrypt(ctx, x, x + 1);
+				x[0] = htonl(x[0]);
+				x[1] = htonl(x[1]);
+			}
+			*/
+			uint16_t port = OUTTRIGGER_PORT;
+			LobbyServer *server = &outtriggerServer;
+			std::string name;
+			if (!strcmp((const char *)&data[0x10], "BombermanOnline"))
+			{
+				port = BOMBERMAN_PORT;
+				server = &bombermanServer;
+				name = (const char *)&data[0x38];
+				auto sep = name.find('\1');
+				if (sep != std::string::npos)
+					// get rid of the password
+					name = name.substr(0, sep);
+			}
+			else if (!strcmp((const char *)&data[0x10], "PropellerA"))
+			{
+				port = PROPELLERA_PORT;
+				server = &propellerServer;
+				name = (const char *)&data[0x38];	// FIXME this is the game key but no user name
+			}
+			else {
+				// Outtrigger
+				name = (const char *)&data[0x10];
+			}
+
+			uint32_t tmpUserId = read32(data, 4);
+
+			// Using 29 (shu)
+			packet.init(Packet::RSP_LOGIN_SUCCESS2);
+			packet.writeData((uint32_t)port);
+			packet.writeData(0u);	// ?
+			packet.writeData(nextUserId);
+
+			Player *player = new Player(*server, source, nextUserId, io_context);
+			player->setName(name);
+			server->addPlayer(player);
+			nextUserId++;
+
+			size_t pktsize = packet.finalize();
+			write32(packet.data, 4, tmpUserId);
+			write32(packet.data, 8, player->getUnrelSeqAndInc());
+			std::error_code ec2;
+			socket.send_to(asio::buffer(packet.data, pktsize), source, 0, ec2);
+			break;
+		}
+
+	case Packet::REQ_PING:
+		{
+			packet.respOK(Packet::REQ_PING);
+			packet.writeData(read32(data, 0x10));
+			size_t pktsize = packet.finalize();
+			write32(packet.data, 4, read32(data, 4));
+			std::error_code ec2;
+			socket.send_to(asio::buffer(packet.data, pktsize), source, 0, ec2);
+			break;
+		}
+
+// TODO this msg is received in some cases
+//	case Packet::REQ_LOBBY_LOGOUT:
+//		break;
+
+	case Packet::REQ_NOP:
+		break;
+
+	default:
+		ERROR_LOG(Game::None, "Bootstrap: Unhandled msg type %x", data[3]);
+		break;
+	}
+}
 
 void dumpData(const uint8_t *data, size_t len)
 {

@@ -1,6 +1,6 @@
-CFLAGS = -g -Wall -O3 # -fsanitize=address -static-libasan
+CFLAGS = -g -Wall -O3 -DNDEBUG # -fsanitize=address -static-libasan
 CXXFLAGS = $(CFLAGS) -std=c++17
-DEPS = asio.h blowfish.h model.h propa_rank.h discord.h log.h kage.h propa_auth.h
+DEPS = asio.h blowfish.h model.h propa_rank.h discord.h log.h kage.h propa_auth.h outtrigger.h
 
 all: kageserver ot_dissect
 
@@ -10,8 +10,8 @@ all: kageserver ot_dissect
 %.o: %.c $(DEPS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-kageserver: kageserver.o blowfish.o model.o discord.o log.o
-	$(CXX) $(CXXFLAGS) -o $@ kageserver.o blowfish.o model.o discord.o log.o -lpthread -lcurl
+kageserver: kageserver.o blowfish.o model.o discord.o log.o outtrigger.o
+	$(CXX) $(CXXFLAGS) -o $@ kageserver.o blowfish.o model.o discord.o log.o outtrigger.o -lpthread -lcurl
 
 ot_dissect: ot_dissect.o
 	$(CXX) $(CXXFLAGS) -o $@ ot_dissect.o

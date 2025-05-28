@@ -129,7 +129,7 @@ public:
 	static constexpr uint32_t PLAYING = 0x80000000;
 
 	Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context);
-	~Room();
+	virtual ~Room();
 
 	uint32_t getId() const {
 		return id;
@@ -144,7 +144,9 @@ public:
 	uint32_t getAttributes() const {
 		return attributes;
 	}
-	void setAttributes(uint32_t attributes);
+	virtual void setAttributes(uint32_t attributes) {
+		this->attributes = attributes;
+	}
 
 	uint32_t getMaxPlayers() const {
 		return maxPlayers;
@@ -172,53 +174,16 @@ public:
 		return players;
 	}
 
-	using sysdata_t = std::array<uint8_t, 20>;
-	std::vector<sysdata_t> getSysData() const;
-	void setSysData(const Player *player, const sysdata_t& sysdata);
-
-	void setGameData(const Player *player, const uint8_t *data);
-
-	using result_t = std::array<uint8_t, 32>;
-	std::vector<result_t> getResults() const;
-	bool setResult(const Player *player, const uint8_t *result);
-
-	bool setReady(const Player *player);
-
-	uint16_t getNextFrame() {
-		return frameNum++;
+	virtual void rudpAcked(Player *player) {
 	}
-
-	void reset();
-	void startSync();
-	void endGame();
-
-	void rudpAcked(Player *player);
 
 	void writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const;
 
-private:
-	struct PlayerState
-	{
-		enum State {
-			Init,		// initial state
-			SysData,	// SYS data received
-			SysOk,		// SYS_OK is ack'ed
-			Ready,		// READY received
-			Started,	// START_GAME is ack'ed
-			Result,		// RESULT received
-			Gone,		// player left
-		};
-		State state;
-		sysdata_t sysdata;
-		std::array<uint8_t, 18> gamedata;
-		result_t result;
-	};
+protected:
+	virtual void onRemovePlayer(Player *player, int index) {
+	}
 
 	void openNetdump();
-	void sendGameData(const std::error_code& ec);
-	PlayerState& getPlayerState(unsigned index);
-	void sendGameOver();
-
 	void closeNetdump() {
 		if (netdump != nullptr)
 			fclose(netdump);
@@ -231,16 +196,10 @@ private:
 	Player *owner;
 	uint32_t maxPlayers = 0;
 	std::string password;
-	uint16_t frameNum = 0;
-	enum { Init, SyncStarted, InGame, GameOver, Result } roomState = Init;
 	std::vector<Player *> players;
-	std::vector<PlayerState> playerState;
-	asio::steady_timer timer;
 	LobbyServer& server;
 	const Game game;
 	FILE *netdump = nullptr;
-	asio::steady_timer timeLimit;
-	int pointLimit = 0;
 };
 
 class Lobby
@@ -250,13 +209,6 @@ public:
 		: server(server), id(id), name(name)
 	{
 		assert(name.length() <= 16);
-		/* Test player and room
-		Player *p = new Player(server, asio::ip::udp::endpoint(), 0x4001);
-		p->setLobby(this);
-		p->setName("dummy");
-		Room *room = addRoom("test", 1, p);
-		room->setMaxPlayers(8);
-		*/
 	}
 
 	LobbyServer& getServer() const {
@@ -284,7 +236,7 @@ public:
 	}
 	Room *getRoom(uint32_t id) const;
 	std::vector<Room *> getRooms() const;
-	Room *addRoom(const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context);
+	void addRoom(Room *room);
 	void removeRoom(Room *room);
 
 private:
@@ -293,7 +245,6 @@ private:
 	std::string name;
 	std::vector<Player *> players;
 	std::map<uint32_t, Room *> rooms;
-	uint32_t nextRoomId = 0x2001;
 };
 
 class Server
@@ -352,6 +303,7 @@ public:
 	void addPlayer(Player *player);
 	void removePlayer(Player *player);
 	void send(Packet& packet, const asio::ip::udp::endpoint& endpoint);
+	virtual Room *addRoom(const std::string& name, uint32_t attributes, Player *owner);
 
 	const Game game;
 
@@ -367,6 +319,7 @@ protected:
 	void startTimer();
 
 	std::vector<Lobby> lobbies;
+	uint32_t nextRoomId = 0x2001;
 	using PlayerMap = std::map<asio::ip::udp::endpoint, Player *>;
 	PlayerMap players;
 	asio::steady_timer timer;
@@ -375,41 +328,4 @@ protected:
 	Packet replyPacket;
 	Packet relayPacket;
 	static constexpr uint32_t LOBBY_ID_BASE = 0x3001;
-};
-
-class OuttriggerServer : public LobbyServer
-{
-public:
-	OuttriggerServer(uint16_t port, asio::io_context& io_context)
-		: LobbyServer(Game::Outtrigger, port, io_context) {}
-
-protected:
-	bool handlePacket(Player *player, const uint8_t *data, size_t len) override;
-};
-
-class BootstrapServer : public Server
-{
-public:
-	BootstrapServer(uint16_t port, asio::io_context& io_context)
-		: Server(port, io_context),
-		  bombermanServer(Game::Bomberman, BOMBERMAN_PORT, io_context),
-		  outtriggerServer(OUTTRIGGER_PORT, io_context),
-		  propellerServer(Game::PropellerA, PROPELLERA_PORT, io_context)
-	{
-	}
-
-	void start();
-
-private:
-	void handlePacket(const uint8_t *data, size_t len) override;
-
-	uint32_t nextUserId = 0x1001;
-	LobbyServer bombermanServer;
-	OuttriggerServer outtriggerServer;
-	LobbyServer propellerServer;
-	static constexpr uint16_t BOMBERMAN_PORT = 9091;
-	static constexpr uint16_t OUTTRIGGER_PORT = 9092;
-	static constexpr uint16_t PROPELLERA_PORT = 9093;
-	static constexpr const char *OuttriggerKey = "reggirttuO";
-	static constexpr const char *PropellerKey = "ArelleporP";
 };
