@@ -287,7 +287,9 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		}
 	case Packet::REQ_CHG_USER_STATUS:
 		{
-			player->setStatus(read32(data, 0x10));
+			uint32_t status = read32(data, 0x10);
+			DEBUG_LOG(game, "REQ_CHG_USER_STATUS %x", status);
+			player->setStatus(status);
 			replyPacket.respOK(Packet::REQ_CHG_USER_STATUS);
 			replyPacket.ack(read32(data, 8));
 			replyPacket.writeData(0u);	// status?
@@ -578,16 +580,6 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					replyPacket.ack(seq);
 					replyPacket.flags |= flags & Packet::FLAG_LOBBY;
 				}
-				else
-				{
-					// FIXME not sure what to do with these. send msg10 OWNER -> game replies with msgF OWNER.
-					// If broadcast, other players can change game settings
-					TagCmd tag;
-					tag.full = read16(data, 0x10);
-					INFO_LOG(game, "relUDP msgF: tag=%x (%04x)", tag.command, tag.full);
-					replyPacket.init(Packet::REQ_NOP);
-					replyPacket.ack(read32(data, 8));
-				}
 			}
 			else
 			{
@@ -618,7 +610,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			}
 			else {
 				// sends 4 ints, not sure what should be returned
-				// FIXME bomberman test -> causes chat(F) packets to be sent
+				// causes chat(F) packets to be sent
 				// works: no logged failure (can be forced with seq=-1)
 				replyPacket.init(Packet::REQ_PING);
 				replyPacket.writeData(&data[0x10], len - 0x10);
@@ -627,7 +619,8 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		}
 
 	case Packet::REQ_CHG_USER_PROP:
-		replyPacket.respOK(Packet::REQ_CHG_USER_PROP);
+		DEBUG_LOG(game, "REQ_CHG_USER_PROP");
+	replyPacket.respOK(Packet::REQ_CHG_USER_PROP);
 		replyPacket.ack(read32(data, 8));
 		// TODO parse
 		break;
@@ -740,27 +733,9 @@ bool Room::removePlayer(Player *player)
 
 	if (owner == player)
 	{
-		// Select new owner and notify him
+		// Select new owner
 		owner = players[0];
-		Packet packet;
-		packet.init(Packet::RSP_TAG_CMD);
-		packet.flags |= Packet::FLAG_RUDP;
-		packet.writeData(0u);
-		TagCmd tag;
-		tag.command = TagCmd::OWNER;
-		packet.writeData(tag.full);
 		INFO_LOG(game, "%s is the new owner of %s", owner->getName().c_str(), name.c_str());
-
-		if (players.size() >= 2)
-		{
-			// Send START_OK
-			packet.init(Packet::RSP_TAG_CMD);
-			packet.flags |= Packet::FLAG_RUDP;
-			packet.writeData(0u);
-			tag.command = TagCmd::START_OK;
-			packet.writeData(tag.full);
-		}
-		owner->send(packet);
 	}
 	return false;
 }

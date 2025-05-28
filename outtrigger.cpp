@@ -38,6 +38,22 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 	if (flags & Packet::FLAG_ACK)
 		player->ackRUdp(read32(data, 0xc));
 
+	if (data[3] == Packet::REQ_CHAT)
+	{
+		uint16_t flags = read16(data, 0);
+		if ((flags & Packet::FLAG_RUDP) != 0 && (flags & Packet::FLAG_RELAY) == 0)
+		{
+			// FIXME not sure what to do with these. send msg10 OWNER -> game replies with msgF OWNER.
+			// If broadcast, other players can change game settings
+			TagCmd tag;
+			tag.full = read16(data, 0x10);
+			INFO_LOG(game, "relUDP msgF: tag=%x (%04x)", tag.command, tag.full);
+			replyPacket.init(Packet::REQ_NOP);
+			replyPacket.ack(read32(data, 8));
+			return true;
+		}
+	}
+
 	if (data[3] != Packet::REQ_GAME_DATA)
 		return false;
 
@@ -252,6 +268,28 @@ void OTRoom::onRemovePlayer(Player *player, int index)
 	{
 		PlayerState& state = getPlayerState(index);
 		state.state = PlayerState::Gone;
+	}
+	if (owner == player)
+	{
+		// Notify new owner
+		Packet packet;
+		packet.init(Packet::RSP_TAG_CMD);
+		packet.flags |= Packet::FLAG_RUDP;
+		packet.writeData(0u);
+		TagCmd tag;
+		tag.command = TagCmd::OWNER;
+		packet.writeData(tag.full);
+
+		if (players.size() >= 3)	// at least 2 players will remain so game can start
+		{
+			// Send START_OK
+			packet.init(Packet::RSP_TAG_CMD);
+			packet.flags |= Packet::FLAG_RUDP;
+			packet.writeData(0u);
+			tag.command = TagCmd::START_OK;
+			packet.writeData(tag.full);
+		}
+		players[1]->send(packet);
 	}
 }
 

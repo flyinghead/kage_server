@@ -1,10 +1,12 @@
 #include "kage.h"
+#include "outtrigger.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <time.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <map>
 
 typedef struct __attribute__((packed))
 {
@@ -58,6 +60,8 @@ int main(int argc, char *argv[])
 	uint8_t buf[1500];
 	time_t start = 0;
 	char ip[INET_ADDRSTRLEN];
+	std::map<std::pair<uint32_t, uint16_t>, uint32_t> relSeqs;
+	std::map<std::pair<uint32_t, uint16_t>, int> scores;
 
 	while (fread(&h, sizeof(h), 1, stdin) == 1)
 	{
@@ -84,6 +88,15 @@ int main(int argc, char *argv[])
 			}
 			else {
 				printf("\t\t\t\t\t");
+			}
+			printf("%s%04x %04x ", data[0] & 0x80 ? "!" : " ", read32(data, 8), read32(data, 0xc));
+			if (data[0] & 0x80)
+			{
+				uint32_t& relSeq = relSeqs[std::make_pair(uint32_t(h.addr), uint16_t(h.port))];
+				uint32_t newSeq = read32(data, 8);
+				//if (newSeq != 0 && newSeq <= relSeq)
+				//	printf("***!!!*** ");
+				relSeq = newSeq;
 			}
 
 			switch (data[3])
@@ -127,10 +140,49 @@ int main(int argc, char *argv[])
 						printf("tag:START_OK\n");
 						break;
 					case TagCmd::SYNC:
-						printf("tag:SYNC\n");
-						break;
+						{
+							printf("tag:SYNC ");
+							//for (int i = 0; i < 0x12; i++)
+							//	printf(" %02x", data[0x12 + i]);
+							//printf("\n");
+							int newScore = data[0x12 + 8] / 2 - 9;
+							int& score = scores[std::make_pair(uint32_t(h.addr), uint16_t(h.port))];
+							if (data[0x12 + 8] != 0xfe /* data[0x12 + 9] != 0xf */ /* data[0x12 + 9] & 0x30 */)
+							{
+								if (newScore < score && score - newScore != 2) {
+									printf("ERROR score going down %d -> %d.", score, newScore);
+									for (int i = 0; i < 0x12; i++)
+										printf(" %02x", data[0x12 + i]);
+									//printf("\n");
+									//exit(1);
+								}
+								else if (newScore != score) {
+									printf(" score %d (%+d)", newScore, newScore - score);
+//									if (newScore - score >= 3) {
+										for (int i = 0; i < 0x12; i++)
+											printf(" %02x", data[0x12 + i]);
+										printf("\n");
+//									}
+								}
+								score = newScore;
+							}
+							else if (score == newScore) {
+								printf("MISSED match? %02x %02x", data[0x12 + 8], data[0x12 + 9]);
+								//for (int i = 0; i < 0x12; i++)
+								//	printf(" %02x", data[0x12 + i]);
+							}
+							else {
+								printf("NOT MISSED (%d->%d) %02x %02x", score, newScore, data[0x12 + 8], data[0x12 + 9]);
+							}
+							printf("\n");
+							break;
+						}
 					case TagCmd::SYS:
-						printf("tag:SYS\n");
+						printf("tag:SYS");
+						for (unsigned i = 0; i < size - 0x10; i++)
+							printf(" %02x", data[0x10 + i]);
+						printf("\n");
+						scores.clear();
 						break;
 					case TagCmd::TIME_OUT:
 						printf("tag:TIME_OUT\n");

@@ -58,6 +58,7 @@ public:
 		REQ_JOIN_LOBBY_ROOM = 6,
 		REQ_LEAVE_LOBBY_ROOM = 7,
 		REQ_CHG_ROOM_STATUS = 8,
+		// REG_CHG_ROOM_NAME = 9,  or max players?
 		REQ_QRY_USERS = 0xa,
 		REQ_QRY_ROOMS = 0xb,
 		REQ_CHG_USER_PROP = 0xc,
@@ -155,8 +156,8 @@ public:
 			throw std::runtime_error("Packet too big");
 		write16(data, startOffset, flags | chunkSize);
 		data[startOffset + 3] = type;
-		memcpy(&data[size], &ServerTag, sizeof(ServerTag));
-		return size + sizeof(ServerTag);
+		memcpy(&data[size], &KageToken, sizeof(KageToken));
+		return size + sizeof(KageToken);
 	}
 
 	void append(Command type)
@@ -164,8 +165,8 @@ public:
 		if (startOffset == 0)
 			write16(data, 0, read16(data, 0) | FLAG_CONTINUE);
 		startOffset = size;
-		// reset server tag to 0
-		memset(&data[size], 0, sizeof(ServerTag));
+		// reset kage token to 0
+		memset(&data[size], 0, sizeof(KageToken));
 		size += 0x10;
 		this->type = type;
 		flags = FLAG_UNKNOWN;
@@ -175,45 +176,5 @@ public:
 		return size == 0x10 && flags == FLAG_UNKNOWN && type == REQ_NOP && startOffset == 0;
 	}
 
-	static constexpr uint32_t ServerTag = 0x006647BA;
-};
-
-// Outtrigger game data
-
-struct TagCmd
-{
-	enum {
-		SYNC = 0,
-		SYS = 1,
-		SYS2 = 2,
-		SYS_OK = 3,
-		START_OK = 4,
-		READY = 5,
-		GAME_START = 6,
-		GAME_OVER = 7,
-		JOIN_OK = 8,
-		JOIN_NG = 9,
-		PAUSE = 0xa,
-		WAIT_OVER = 0xb,
-		RESULT = 0xc,
-		RESULT2 = 0xd,
-		OWNER = 0xe,
-		ECHO = 0xf,
-		RESET = 0x10,
-		TIME_OUT = 0x11,
-	};
-
-	TagCmd(uint16_t v = 0) {
-		full = v;
-	}
-
-	union {
-		struct {
-			uint16_t :3;
-			uint16_t id:3;		// seq# ?
-			uint16_t player:4;	// == playerCount in SYS2
-			uint16_t command:6;
-		};
-		uint16_t full;
-	};
+	static constexpr uint32_t KageToken = 0x106647BA;
 };

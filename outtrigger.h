@@ -18,6 +18,45 @@
 */
 #include "model.h"
 
+// Outtrigger game data
+struct TagCmd
+{
+	enum {
+		SYNC = 0,
+		SYS = 1,
+		SYS2 = 2,
+		SYS_OK = 3,
+		START_OK = 4,
+		READY = 5,
+		GAME_START = 6,
+		GAME_OVER = 7,
+		JOIN_OK = 8,
+		JOIN_NG = 9,
+		PAUSE = 0xa,
+		WAIT_OVER = 0xb,
+		RESULT = 0xc,
+		RESULT2 = 0xd,
+		OWNER = 0xe,
+		ECHO = 0xf,
+		RESET = 0x10,
+		TIME_OUT = 0x11,
+	};
+
+	TagCmd(uint16_t v = 0) {
+		full = v;
+	}
+
+	union {
+		struct {
+			uint16_t :3;
+			uint16_t id:3;		// seq# ?
+			uint16_t player:4;	// == playerCount in SYS2
+			uint16_t command:6;
+		};
+		uint16_t full;
+	};
+};
+
 class OTRoom : public Room
 {
 public:
