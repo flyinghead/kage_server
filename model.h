@@ -43,6 +43,7 @@ public:
 	{
 		setAlive();
 	}
+	~Player();
 
 	uint32_t getId() const {
 		return id;

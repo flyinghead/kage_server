@@ -23,6 +23,11 @@
 
 using namespace std::chrono_literals;
 
+Player::~Player() {
+	std::error_code ec;
+	timer.cancel(ec);
+}
+
 void Player::setAlive() {
 	lastTime = Clock::now();
 }
