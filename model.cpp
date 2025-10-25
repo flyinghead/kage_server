@@ -863,7 +863,7 @@ void Lobby::addRoom(Room *room)
 	for (Player *pl : players)
 		if (pl != owner)
 			lobbyUsers.push_back(pl->getName());
-	discordGameCreated(server.game, owner->getName(), name, lobbyUsers);
+	discordGameCreated(server.game, owner->getName(), room->getName(), lobbyUsers);
 }
 
 void Lobby::removeRoom(Room *room) {
