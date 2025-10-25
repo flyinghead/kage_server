@@ -219,6 +219,8 @@ int main(int argc, char *argv[])
 		}
 	});
 	loadConfig(argc >= 2 ? argv[1] : "kage.cfg");
+	if (Config.count("DUMP_NET_DATA") > 0)
+		Room::DumpNetData = atoi(Config["DUMP_NET_DATA"].c_str()) != 0;
 
 	BootstrapServer server(9090, io_context);
 	server.start();

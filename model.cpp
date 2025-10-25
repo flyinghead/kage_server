@@ -682,6 +682,8 @@ Room *LobbyServer::addRoom(const std::string& name, uint32_t attributes, Player 
 	return room;
 }
 
+bool Room::DumpNetData = false;
+
 Room::Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
 	: lobby(lobby), id(id), name(name), attributes(attributes),
 	  owner(owner), server(lobby.getServer()), game(server.game)
@@ -757,6 +759,8 @@ int Room::getPlayerIndex(const Player *player)
 
 void Room::openNetdump()
 {
+	if (!DumpNetData)
+			return;
 	time_t now = time(nullptr);
 	struct tm tm = *localtime(&now);
 

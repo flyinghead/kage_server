@@ -179,6 +179,8 @@ public:
 
 	void writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const;
 
+	static bool DumpNetData;
+
 protected:
 	virtual void onRemovePlayer(Player *player, int index) {
 	}
