@@ -269,7 +269,7 @@ void OTRoom::onRemovePlayer(Player *player, int index)
 		PlayerState& state = getPlayerState(index);
 		state.state = PlayerState::Gone;
 	}
-	if (owner == player)
+	if (owner == player && players.size() >= 2)
 	{
 		// Notify new owner
 		Packet packet;
