@@ -260,8 +260,14 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 	{
 	case Packet::REQ_LOBBY_LOGIN:	// Only when using 2C response to bootstrap login
 		{
-			replyPacket.respOK(Packet::REQ_LOBBY_LOGIN);
-			replyPacket.ack(read32(data, 8));
+			DEBUG_LOG(game, "REQ_LOBBY_LOGIN");
+			dumpData(data + 0x10, len - 0x10);
+			player->setName((const char *)&data[0x20]);
+			player->setExtraData(&data[0x138], read32(data, 0x14));
+
+			replyPacket.init(Packet::RSP_LOGIN_SUCCESS2);
+			replyPacket.writeData((uint32_t)socket.local_endpoint().port());
+			replyPacket.writeData(0u);	// ? set to 1 by BM
 			replyPacket.writeData(player->getId());
 			break;
 		}
@@ -322,7 +328,9 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					{
 						replyPacket.writeData(pl->getName().c_str(), 0x10);
 						replyPacket.writeData(pl->getId());
-						replyPacket.writeData(0u);	// controllers
+						const auto& extra = player->getExtraData();
+						replyPacket.writeData((uint32_t)extra.size());
+						replyPacket.writeData(extra.data(), extra.size());
 					}
 				}
 			}
@@ -344,12 +352,14 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					else
 					{
 						const std::vector<Player *> players = room->getPlayers();
-						replyPacket.writeData(room->getPlayerCount());
+						replyPacket.writeData((uint32_t)players.size());
 						for (Player *pl : players)
 						{
 							replyPacket.writeData(pl->getName().c_str(), 0x10);
 							replyPacket.writeData(pl->getId());
-							replyPacket.writeData(0u);	// controllers
+							const auto& extra = player->getExtraData();
+							replyPacket.writeData((uint32_t)extra.size());
+							replyPacket.writeData(extra.data(), extra.size());
 						}
 					}
 				}
@@ -363,7 +373,8 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			{
 				// lobby
 				Lobby *lobby = getLobby(id);
-				if (lobby == nullptr) {
+				if (lobby == nullptr)
+				{
 					replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
 					replyPacket.writeData(8u);
 					WARN_LOG(game, "%s join lobby failed: unknown lobby id %x", player->getName().c_str(), id);
@@ -377,7 +388,9 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					relayPacket.flags |= Packet::FLAG_LOBBY;
 					relayPacket.writeData(player->getName().c_str(), 0x10);
 					relayPacket.writeData(player->getId());
-					relayPacket.writeData(0u);	// controllers
+					const auto& extra = player->getExtraData();
+					relayPacket.writeData((uint32_t)extra.size());
+					relayPacket.writeData(extra.data(), extra.size());
 
 					replyPacket.respOK(Packet::REQ_JOIN_LOBBY_ROOM);
 					replyPacket.writeData(lobby->getId());
@@ -396,47 +409,58 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					replyPacket.ack(read32(data, 8));
 					replyPacket.writeData(8u);
 					WARN_LOG(game, "%s join room failed: unknown room id %x (lobby %p)", player->getName().c_str(), id, lobby);
+					break;
 				}
-				else
+				if (room->getAttributes() & (Room::LOCKED | Room::PLAYING))
 				{
-					if (room->getAttributes() & 0xc0000000)
-					{
-						// Room locked or in game
-						replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
-						replyPacket.ack(read32(data, 8));
-						// 9 is "room locked"
-						replyPacket.writeData(9u);
-						INFO_LOG(game, "%s join room failed: room locked", player->getName().c_str());
-						break;
-					}
-					std::string password = (const char *)&data[0x18];
-					if (password != room->getPassword())
-					{
-						replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
-						replyPacket.ack(read32(data, 8));
-						// 0xF is incorrect password
-						replyPacket.writeData(0xfu);
-						INFO_LOG(game, "%s join room failed: incorrect password", player->getName().c_str());
-						break;
-					}
-					room->addPlayer(player);
-
-					// Notify other players
-					relayPacket.init(Packet::REQ_JOIN_LOBBY_ROOM);
-					relayPacket.writeData(player->getName().c_str(), 0x10);
-					relayPacket.writeData(player->getId());
-					relayPacket.writeData(0u);	// controllers
-
-					replyPacket.respOK(Packet::REQ_JOIN_LOBBY_ROOM);
-					replyPacket.writeData(room->getId());
+					// Room locked or in game
+					replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
 					replyPacket.ack(read32(data, 8));
-
-					// Push room status to new player
-					replyPacket.init(Packet::REQ_CHG_ROOM_STATUS);
-					replyPacket.writeData(room->getId());
-					replyPacket.writeData("STAT", 4);
-					replyPacket.writeData(room->getAttributes());
+					// 9 is "room locked"
+					replyPacket.writeData(9u);
+					INFO_LOG(game, "%s join room failed: room locked", player->getName().c_str());
+					break;
 				}
+				std::string password = (const char *)&data[0x18];
+				if (password != room->getPassword())
+				{
+					replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
+					replyPacket.ack(read32(data, 8));
+					// 0xF is incorrect password
+					replyPacket.writeData(0xfu);
+					INFO_LOG(game, "%s join room failed: incorrect password", player->getName().c_str());
+					break;
+				}
+				// TODO not enough for Bomberman if guests > 0
+				if (room->getPlayerCount() >= room->getMaxPlayers())
+				{
+					replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
+					replyPacket.ack(read32(data, 8));
+					replyPacket.writeData(8u);
+					WARN_LOG(game, "%s join room failed: room %s full", player->getName().c_str(), room->getName().c_str());
+					break;
+				}
+				room->addPlayer(player);
+
+				// Notify other players
+				relayPacket.init(Packet::REQ_JOIN_LOBBY_ROOM);
+				relayPacket.writeData(player->getName().c_str(), 0x10);
+				relayPacket.writeData(player->getId());
+				const auto& extra = player->getExtraData();
+				relayPacket.writeData((uint32_t)extra.size());
+				relayPacket.writeData(extra.data(), extra.size());
+
+				replyPacket.respOK(Packet::REQ_JOIN_LOBBY_ROOM);
+				replyPacket.writeData(room->getId());
+				replyPacket.ack(read32(data, 8));
+
+				// Push room status to new player
+				replyPacket.init(Packet::REQ_CHG_ROOM_STATUS);
+				replyPacket.writeData(room->getId());
+				replyPacket.writeData("STAT", 4);
+				replyPacket.writeData(room->getAttributes());
+
+				room->createJoinRoomReply(replyPacket, relayPacket, player);
 			}
 			break;
 		}
@@ -535,6 +559,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				replyPacket.writeData("STAT", 4);
 				replyPacket.writeData(attributes);
 
+				room->createJoinRoomReply(replyPacket, relayPacket, player);	// FIXME separate lobby from room players
 			}
 			break;
 		}
@@ -585,49 +610,29 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					replyPacket.ack(seq);
 					replyPacket.flags |= flags & Packet::FLAG_LOBBY;
 				}
-			}
-			else
-			{
-				uint16_t cmd = read16(data, 0x10);
-				if (cmd == 0x3804)	// ping
-				{
-					//bomberman
-					INFO_LOG(game, "chat(F) ping %04x %08x %x", read16(data, 0x12), read32(data, 0x14), data[0x18]);
-					replyPacket.init(Packet::REQ_CHAT);
-					replyPacket.writeData((uint16_t)0x3804u);
-					replyPacket.writeData((uint16_t)0x7800u);
-					replyPacket.writeData(read32(data, 0x14));
-					replyPacket.writeData((uint8_t)0);
-				}
 				else {
-					INFO_LOG(game, "unreliable chat(F) ignored");
+					INFO_LOG(game, "Non-relayed chat(F) ignored");
 				}
+			}
+			else {
+				INFO_LOG(game, "unreliable chat(F) ignored");
 			}
 			break;
 		}
 	case Packet::REQ_PING:
-		{
-			if (game != Game::Bomberman)
-			{
-				replyPacket.respOK(Packet::REQ_PING);
-				// outtrigger and propA send a single value (clock)
-				replyPacket.writeData(read32(data, 0x10));
-			}
-			else {
-				// sends 4 ints, not sure what should be returned
-				// causes chat(F) packets to be sent
-				// works: no logged failure (can be forced with seq=-1)
-				replyPacket.init(Packet::REQ_PING);
-				replyPacket.writeData(&data[0x10], len - 0x10);
-			}
-			break;
-		}
+		DEBUG_LOG(game, "REQ_PING");
+		// outtrigger and propA send a single value (clock)
+		// bomberman sends additional stuff but only cares about the first int32 in the response
+		replyPacket.respOK(Packet::REQ_PING);
+		replyPacket.writeData(&data[0x10], len - 0x10);
+		break;
 
 	case Packet::REQ_CHG_USER_PROP:
 		DEBUG_LOG(game, "REQ_CHG_USER_PROP");
-	replyPacket.respOK(Packet::REQ_CHG_USER_PROP);
+		//dumpData(data + 0x10, len - 0x10);
+		player->setExtraData(data + 0x10, len - 0x10);
+		replyPacket.respOK(Packet::REQ_CHG_USER_PROP);
 		replyPacket.ack(read32(data, 8));
-		// TODO parse
 		break;
 
 	case Packet::REQ_NOP:
@@ -747,7 +752,7 @@ bool Room::removePlayer(Player *player)
 	return false;
 }
 
-int Room::getPlayerIndex(const Player *player)
+int Room::getPlayerIndex(const Player *player) const
 {
 	unsigned i = 0;
 	for (const Player *p : players)

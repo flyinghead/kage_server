@@ -75,12 +75,13 @@ public:
 		RSP_LOGIN_SUCCESS = 0x2d,
 	};
 	enum {
-		FLAG_RELAY = 0x400,
-		FLAG_CONTINUE = 0x800,
-		FLAG_LOBBY = 0x1000,
-		FLAG_UNKNOWN = 0x2000,
-		FLAG_ACK = 0x4000,
-		FLAG_RUDP = 0x8000,
+								// from some debug code:
+		FLAG_RELAY = 0x400,		// T-CH text chat
+		FLAG_CONTINUE = 0x800,	// MULT
+		FLAG_LOBBY = 0x1000,	// LB, GR
+		FLAG_UNKNOWN = 0x2000,	// SNG single?
+		FLAG_ACK = 0x4000,		// ACK
+		FLAG_RUDP = 0x8000,		// RUDP
 	};
 
 	uint8_t data[0x800] {};

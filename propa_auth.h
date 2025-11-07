@@ -28,14 +28,12 @@ extern "C" {
 #include <string>
 #include <vector>
 
-void dumpData(const uint8_t *data, size_t len);
-
 constexpr Game game = Game::PropellerA;
 
 static inline void xor55(uint8_t *data, size_t len)
 {
 	uint8_t *end = data + len;
-	while (data < end)
+	while (data != end)
 		*data++ ^= 0x55;
 }
 
@@ -47,6 +45,7 @@ public:
 	}
 
 	void receive() {
+		// TODO packet matcher, use DynamicBuffer?
 		asio::async_read(socket, asio::buffer(recvBuffer), asio::transfer_at_least(0x68),
 				std::bind(&AuthConnection::onReceive, shared_from_this(), asio::placeholders::error, asio::placeholders::bytes_transferred));
 	}

@@ -19,10 +19,14 @@
 #include "propa_auth.h"
 #include "propa_rank.h"
 #include "model.h"
+#include "bomberman.h"
 #include "outtrigger.h"
 #include "discord.h"
 #include "log.h"
 #include "asio.h"
+extern "C" {
+#include "blowfish.h"
+}
 #include <map>
 #include <fstream>
 #include <sstream>
@@ -32,9 +36,10 @@ static std::map<std::string, std::string> Config;
 class BootstrapServer : public Server
 {
 public:
-	BootstrapServer(uint16_t port, asio::io_context& io_context)
+	BootstrapServer(asio::ip::address_v4 address, uint16_t port, asio::io_context& io_context)
 		: Server(port, io_context),
-		  bombermanServer(Game::Bomberman, BOMBERMAN_PORT, io_context),
+		  address(address),
+		  bombermanServer(BOMBERMAN_PORT, io_context),
 		  outtriggerServer(OUTTRIGGER_PORT, io_context),
 		  propellerServer(Game::PropellerA, PROPELLERA_PORT, io_context)
 	{
@@ -45,8 +50,9 @@ public:
 private:
 	void handlePacket(const uint8_t *data, size_t len) override;
 
+	asio::ip::address_v4 address;
 	uint32_t nextUserId = 0x1001;
-	LobbyServer bombermanServer;
+	BombermanServer bombermanServer;
 	OuttriggerServer outtriggerServer;
 	LobbyServer propellerServer;
 	static constexpr uint16_t BOMBERMAN_PORT = 9091;
@@ -54,6 +60,7 @@ private:
 	static constexpr uint16_t PROPELLERA_PORT = 9093;
 	static constexpr const char *OuttriggerKey = "reggirttuO";
 	static constexpr const char *PropellerKey = "ArelleporP";
+	static constexpr const char *BombermanKey = "Hudson2001";
 };
 
 void BootstrapServer::start()
@@ -66,42 +73,21 @@ void BootstrapServer::start()
 
 void BootstrapServer::handlePacket(const uint8_t *data, size_t len)
 {
-	DEBUG_LOG(Game::None, "Bootstrap: Packet: flags/size %02x %02x command %02x %02x", data[0], data[1], data[2], data[3]);
+	DEBUG_LOG(Game::None, "Bootstrap: packet: flags/size %04x command %04x", read16(data, 0), read16(data, 2));
 	Packet packet;
 	switch (data[3])
 	{
 	case Packet::REQ_BOOTSTRAP_LOGIN:
 		{
-			/* Using 2D and blowfish encryption (works with outtrigger)
-			packet.init(Packet::RSP_LOGIN_SUCCESS, &data[4]);
-			packet.writeData(&data[0x10], 0x28);
-			// FIXME auto addr = socket.local_endpoint().address().to_v4().to_bytes();
-			std::array<uint8_t, 4>addr { 192, 168, 1, 31 };
-			packet.writeData((uint8_t *)addr.data(), addr.size());
-			packet.writeData((uint32_t)socket.local_endpoint().port());
-			packet.writeData(0u);
-			packet.writeData(0u);
-			packet.writeData(0u); // size of following data, sent back when logging to lobby
-			packet.size = ((packet.size + 7) / 8) * 8;
-			BLOWFISH_CTX *ctx = new BLOWFISH_CTX();
-			Blowfish_Init(ctx, (uint8_t *)OuttriggerKey, strlen(OuttriggerKey));
-			for (int i = 0x10; i < packet.size; i += 8)
-			{
-				uint32_t *x = (uint32_t *)&packet.data[i];
-				x[0] = ntohl(x[0]);
-				x[1] = ntohl(x[1]);
-				Blowfish_Encrypt(ctx, x, x + 1);
-				x[0] = htonl(x[0]);
-				x[1] = htonl(x[1]);
-			}
-			*/
-			uint16_t port = OUTTRIGGER_PORT;
-			LobbyServer *server = &outtriggerServer;
+			uint16_t port;
+			LobbyServer *server;
 			std::string name;
+			const char *key;
 			if (!strcmp((const char *)&data[0x10], "BombermanOnline"))
 			{
 				port = BOMBERMAN_PORT;
 				server = &bombermanServer;
+				key = BombermanKey;
 				name = (const char *)&data[0x38];
 				auto sep = name.find('\1');
 				if (sep != std::string::npos)
@@ -112,20 +98,39 @@ void BootstrapServer::handlePacket(const uint8_t *data, size_t len)
 			{
 				port = PROPELLERA_PORT;
 				server = &propellerServer;
+				key = PropellerKey;
 				name = (const char *)&data[0x38];	// FIXME this is the game key but no user name
 			}
 			else {
 				// Outtrigger
+				port = OUTTRIGGER_PORT;
+				server = &outtriggerServer;
+				key = OuttriggerKey;
 				name = (const char *)&data[0x10];
 			}
 
 			uint32_t tmpUserId = read32(data, 4);
 
-			// Using 29 (shu)
-			packet.init(Packet::RSP_LOGIN_SUCCESS2);
+			packet.init(Packet::RSP_LOGIN_SUCCESS);
+			packet.writeData(&data[0x10], 0x28);
+			asio::ip::address_v4::bytes_type addrBytes = address.to_bytes();
+			packet.writeData((uint8_t *)addrBytes.data(), addrBytes.size());
 			packet.writeData((uint32_t)port);
-			packet.writeData(0u);	// ?
-			packet.writeData(nextUserId);
+			packet.writeData(0u);
+			packet.writeData(0u);
+			packet.writeData(0u); // size of following data, sent back when logging to lobby
+			packet.size = ((packet.size + 7) / 8) * 8;
+			BLOWFISH_CTX *ctx = new BLOWFISH_CTX();
+			Blowfish_Init(ctx, (uint8_t *)key, strlen(key));
+			for (int i = 0x10; i < packet.size; i += 8)
+			{
+				uint32_t *x = (uint32_t *)&packet.data[i];
+				x[0] = ntohl(x[0]);
+				x[1] = ntohl(x[1]);
+				Blowfish_Encrypt(ctx, x, x + 1);
+				x[0] = htonl(x[0]);
+				x[1] = htonl(x[1]);
+			}
 
 			Player *player = new Player(*server, source, nextUserId, io_context);
 			player->setName(name);
@@ -222,7 +227,13 @@ int main(int argc, char *argv[])
 	if (Config.count("DUMP_NET_DATA") > 0)
 		Room::DumpNetData = atoi(Config["DUMP_NET_DATA"].c_str()) != 0;
 
-	BootstrapServer server(9090, io_context);
+	std::string serverIp = Config["SERVER_IP"];
+	if (serverIp.empty()) {
+		ERROR_LOG(Game::None, "SERVER_IP not set in kage.cfg. Exiting");
+		return 1;
+	}
+	asio::ip::address_v4 serverAddr = asio::ip::address_v4::from_string(serverIp);
+	BootstrapServer server(serverAddr, 9090, io_context);
 	server.start();
 	AuthAcceptor authServer(io_context);
 	authServer.start();

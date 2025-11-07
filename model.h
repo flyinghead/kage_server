@@ -59,6 +59,16 @@ public:
 		return endpoint;
 	}
 
+	const std::vector<uint8_t>& getExtraData() const {
+		return extraData;
+	}
+	void setExtraData(const uint8_t *data, unsigned size)
+	{
+		extraData.resize(size);
+		if (size != 0)
+			memcpy(extraData.data(), data, size);
+	}
+
 	void setStatus(uint32_t status) {
 		this->status = status;
 	}
@@ -104,6 +114,7 @@ private:
 	uint32_t id = 0;
 	std::string name;
 	asio::ip::udp::endpoint endpoint;
+	std::vector<uint8_t> extraData;
 
 	uint32_t status = 0;
 	Lobby *lobby = nullptr;
@@ -163,19 +174,21 @@ public:
 		this->password = password;
 	}
 
-	uint32_t getPlayerCount() const {
+	virtual uint32_t getPlayerCount() const {
 		return (uint32_t)players.size();
 	}
-	int getPlayerIndex(const Player *player);
+	int getPlayerIndex(const Player *player) const;
 
-	void addPlayer(Player *player);
-	bool removePlayer(Player *player);
+	virtual void addPlayer(Player *player);
+	virtual bool removePlayer(Player *player);
 
 	const std::vector<Player *>& getPlayers() const {
 		return players;
 	}
 
 	virtual void rudpAcked(Player *player) {
+	}
+	virtual void createJoinRoomReply(Packet& reply, Packet& relay, Player *player) {
 	}
 
 	void writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const;
