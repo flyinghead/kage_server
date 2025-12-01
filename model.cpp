@@ -261,7 +261,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 	case Packet::REQ_LOBBY_LOGIN:	// Only when using 2C response to bootstrap login
 		{
 			DEBUG_LOG(game, "REQ_LOBBY_LOGIN");
-			dumpData(data + 0x10, len - 0x10);
+			//dumpData(data + 0x10, len - 0x10);
 			player->setName((const char *)&data[0x20]);
 			player->setExtraData(&data[0x138], read32(data, 0x14));
 

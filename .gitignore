@@ -1,0 +1,7 @@
+/dmp/
+/old/
+*.o
+*.dmp
+kageserver
+ot_dissect
+/kage.service
