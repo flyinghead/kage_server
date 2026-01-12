@@ -18,7 +18,7 @@
 */
 #pragma once
 #include "kage.h"
-#include "asio.h"
+#include <dcserver/asio.hpp>
 #include <stdint.h>
 #include <string>
 #include <array>
@@ -320,6 +320,7 @@ public:
 	void removePlayer(Player *player);
 	void send(Packet& packet, const asio::ip::udp::endpoint& endpoint);
 	virtual Room *addRoom(const std::string& name, uint32_t attributes, Player *owner);
+	void getStatus(int& playerCount, int& gameCount);
 
 	const Game game;
 

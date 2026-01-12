@@ -19,8 +19,8 @@
 #pragma once
 #include "kage.h"
 #include "log.h"
-#include "shared_this.h"
-#include "asio.h"
+#include <dcserver/shared_this.hpp>
+#include <dcserver/asio.hpp>
 extern "C" {
 #include "blowfish.h"
 }

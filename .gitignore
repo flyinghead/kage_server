@@ -5,3 +5,6 @@
 kageserver
 ot_dissect
 /kage.service
+/.cproject
+/.gdb_history
+/.project

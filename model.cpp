@@ -692,6 +692,14 @@ Room *LobbyServer::addRoom(const std::string& name, uint32_t attributes, Player 
 	return room;
 }
 
+void LobbyServer::getStatus(int& playerCount, int& gameCount)
+{
+	playerCount = players.size();
+	gameCount = 0;
+	for (const Lobby& lobby : lobbies)
+		gameCount += lobby.getRooms().size();
+}
+
 bool Room::DumpNetData = false;
 
 Room::Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)

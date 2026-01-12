@@ -18,8 +18,8 @@
 */
 #pragma once
 #include "log.h"
-#include "shared_this.h"
-#include "asio.h"
+#include <dcserver/shared_this.hpp>
+#include <dcserver/asio.hpp>
 #include <array>
 #include <string>
 #include <vector>

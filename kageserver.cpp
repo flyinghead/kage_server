@@ -21,9 +21,9 @@
 #include "model.h"
 #include "bomberman.h"
 #include "outtrigger.h"
-#include "discord.h"
 #include "log.h"
-#include "asio.h"
+#include <dcserver/asio.hpp>
+#include <dcserver/status.hpp>
 extern "C" {
 #include "blowfish.h"
 }
@@ -41,11 +41,13 @@ public:
 		  address(address),
 		  bombermanServer(BOMBERMAN_PORT, io_context),
 		  outtriggerServer(OUTTRIGGER_PORT, io_context),
-		  propellerServer(Game::PropellerA, PROPELLERA_PORT, io_context)
+		  propellerServer(Game::PropellerA, PROPELLERA_PORT, io_context),
+		  statusTimer(io_context)
 	{
 	}
 
 	void start();
+	void onUpdateTimer(const std::error_code& ec);
 
 private:
 	void handlePacket(const uint8_t *data, size_t len) override;
@@ -55,6 +57,7 @@ private:
 	BombermanServer bombermanServer;
 	OuttriggerServer outtriggerServer;
 	LobbyServer propellerServer;
+	asio::steady_timer statusTimer;
 	static constexpr uint16_t BOMBERMAN_PORT = 9091;
 	static constexpr uint16_t OUTTRIGGER_PORT = 9092;
 	static constexpr uint16_t PROPELLERA_PORT = 9093;
@@ -69,6 +72,7 @@ void BootstrapServer::start()
 	outtriggerServer.start();
 	propellerServer.start();
 	Server::start();
+	onUpdateTimer({});
 }
 
 void BootstrapServer::handlePacket(const uint8_t *data, size_t len)
@@ -169,6 +173,28 @@ void BootstrapServer::handlePacket(const uint8_t *data, size_t len)
 	}
 }
 
+void BootstrapServer::onUpdateTimer(const std::error_code& ec)
+{
+	if (ec)
+		return;
+	int playerCount;
+	int gameCount;
+	bombermanServer.getStatus(playerCount, gameCount);
+	statusUpdate("bomberman", playerCount, gameCount);
+	outtriggerServer.getStatus(playerCount, gameCount);
+	statusUpdate("outtrigger", playerCount, gameCount);
+	propellerServer.getStatus(playerCount, gameCount);
+	statusUpdate("propeller", playerCount, gameCount);
+	try {
+		statusCommit("kage");
+	} catch (const std::exception& e) {
+		ERROR_LOG(Game::None, "statusCommit failed: %s", e.what());
+	}
+
+	statusTimer.expires_at(asio::chrono::steady_clock::now() + asio::chrono::seconds(statusGetInterval()));
+	statusTimer.async_wait(std::bind(&BootstrapServer::onUpdateTimer, this, asio::placeholders::error));
+}
+
 void dumpData(const uint8_t *data, size_t len)
 {
 	for (size_t i = 0; i < len;)
@@ -207,8 +233,6 @@ static void loadConfig(const std::string& path)
 		else
 			ERROR_LOG(Game::None, "config file syntax error: %s", line.c_str());
 	}
-	if (Config.count("DISCORD_WEBHOOK") > 0)
-		setDiscordWebhook(Config["DISCORD_WEBHOOK"]);
 }
 
 int main(int argc, char *argv[])
