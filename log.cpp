@@ -18,6 +18,7 @@
 #include "log.h"
 #include <string>
 #include <cstdarg>
+#include <ctime>
 
 const char *LevelNames[] = {
 	"ERROR",

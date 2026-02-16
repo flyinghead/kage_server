@@ -5,6 +5,7 @@ prefix = /usr/local
 exec_prefix = $(prefix)
 sbindir = $(exec_prefix)/sbin
 sysconfdir = $(prefix)/etc
+localstatedir = /var/local
 CFLAGS = -g -Wall -O3 -DNDEBUG # -fsanitize=address -static-libasan
 CXXFLAGS = $(CFLAGS) -std=c++17
 DEPS = blowfish.h model.h propa_rank.h discord.h log.h kage.h propa_auth.h outtrigger.h bomberman.h
@@ -35,11 +36,10 @@ install: all
 
 kage.service: kage.service.in Makefile
 	cp kage.service.in kage.service
-	sed -e "s/INSTALL_USER/$(USER)/g" -e "s:SBINDIR:$(sbindir):g" -e "s:SYSCONFDIR:$(sysconfdir):g" < $< > $@
+	sed -e "s/INSTALL_USER/$(USER)/g" -e "s:SBINDIR:$(sbindir):g" -e "s:SYSCONFDIR:$(sysconfdir):g" -e "s:LOCALSTATEDIR:$(localstatedir):g" < $< > $@
 
 installservice: kage.service
 	mkdir -p /usr/lib/systemd/system/
 	cp $< /usr/lib/systemd/system/
-	mkdir -p /var/log/kage
-	chown $(USER):$(USER) /var/log/kage
+	mkdir -p $(localstatedir)/log/
 	systemctl enable kage.service
