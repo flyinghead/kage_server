@@ -58,7 +58,7 @@ public:
 		REQ_JOIN_LOBBY_ROOM = 6,
 		REQ_LEAVE_LOBBY_ROOM = 7,
 		REQ_CHG_ROOM_STATUS = 8,
-		// REG_CHG_ROOM_NAME = 9,  or max players?
+		REG_QRY_ROOM_ATTR = 9,
 		REQ_QRY_USERS = 0xa,
 		REQ_QRY_ROOMS = 0xb,
 		REQ_CHG_USER_PROP = 0xc,
@@ -66,6 +66,8 @@ public:
 		REQ_QRY_LOBBIES = 0xe,
 		REQ_CHAT = 0xf,
 		REQ_GAME_DATA = 0x11,
+		REQ_AUDIO_START = 0x12,
+		REQ_AUDIO_STOP = 0x13,
 		REQ_PING = 0x14,
 
 		RSP_TAG_CMD = 0x10,

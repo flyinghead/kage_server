@@ -20,6 +20,7 @@
 #include "log.h"
 #include <dcserver/shared_this.hpp>
 #include <dcserver/asio.hpp>
+#include <dcserver/database.hpp>
 #include <array>
 #include <string>
 #include <vector>
@@ -33,21 +34,20 @@ public:
 
 	void receive()
 	{
-		recvBuffer.clear();
 		socket.async_read_some(asio::buffer(recvBuffer),
 				std::bind(&RankConnection::onReceive, shared_from_this(), asio::placeholders::error, asio::placeholders::bytes_transferred));
 	}
 
-	void send(const std::vector<uint8_t>& data)
+	void send(const std::vector<uint32_t>& data)
 	{
-		memcpy(&sendBuffer[sendIdx], data.data(), data.size());
-		sendIdx += data.size();
+		memcpy(&sendBuffer[sendIdx], data.data(), data.size() * sizeof(uint32_t));
+		sendIdx += data.size() * sizeof(uint32_t);
 		send();
 	}
 
 private:
-	RankConnection(asio::io_context& io_context)
-		: socket(io_context) {}
+	RankConnection(asio::io_context& io_context, Database& database)
+		: socket(io_context), database(database) {}
 
 	void send()
 	{
@@ -69,21 +69,14 @@ private:
 		sending = false;
 	}
 
-	void onReceive(const std::error_code& ec, size_t len)
-	{
-		std::vector<uint8_t> data(4 * 8);
-		for (int i = 0; i < 8; i++) {
-			uint32_t v = ntohl(i + 1);
-			memcpy(&data[i * 4], &v, 4);
-		}
-		send(data);
-	}
+	void onReceive(const std::error_code& ec, size_t len);
 
 	asio::ip::tcp::socket socket;
-	std::vector<uint8_t> recvBuffer;
+	std::array<uint8_t, 1024> recvBuffer;
 	std::array<uint8_t, 8500> sendBuffer;
 	size_t sendIdx = 0;
 	bool sending = false;
+	Database& database;
 
 	friend super;
 };
@@ -91,18 +84,15 @@ private:
 class RankAcceptor
 {
 public:
-	RankAcceptor(asio::io_context& io_context)
-		: io_context(io_context),
-		  acceptor(asio::ip::tcp::acceptor(io_context,
-				asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 10100)))
-	{
-		asio::socket_base::reuse_address option(true);
-		acceptor.set_option(option);
+	RankAcceptor(asio::io_context& io_context, const std::string& dbpath);
+
+	~RankAcceptor() {
+		Instance = nullptr;
 	}
 
 	void start()
 	{
-		RankConnection::Ptr newConnection = RankConnection::create(io_context);
+		RankConnection::Ptr newConnection = RankConnection::create(io_context, database);
 
 		acceptor.async_accept(newConnection->getSocket(),
 			[this, newConnection](const std::error_code& error) {
@@ -114,7 +104,13 @@ public:
 			});
 	}
 
+	void updateRank(const std::string& name, int kills, int wins, int games,
+			int flightTime, int flightDistance, int shotDown, int points);
+
+	static RankAcceptor *Instance;
+
 private:
 	asio::io_context& io_context;
 	asio::ip::tcp::acceptor acceptor;
+	Database database;
 };

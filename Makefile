@@ -1,14 +1,14 @@
 #
-# dependencies: libasio-dev libdcserver
+# dependencies: libasio-dev libdcserver libsqlite3-dev
 #
 prefix = /usr/local
 exec_prefix = $(prefix)
 sbindir = $(exec_prefix)/sbin
 sysconfdir = $(prefix)/etc
 localstatedir = /var/local
-CFLAGS = -g -Wall -O3 -DNDEBUG # -fsanitize=address -static-libasan
+CFLAGS = -g -Wall "-DDATADIR=\"$(localstatedir)/lib/kage\"" -O3 -DNDEBUG # -fsanitize=address -static-libasan
 CXXFLAGS = $(CFLAGS) -std=c++17
-DEPS = blowfish.h model.h propa_rank.h discord.h log.h kage.h propa_auth.h outtrigger.h bomberman.h
+DEPS = blowfish.h model.h propa_rank.h discord.h log.h kage.h propa_auth.h outtrigger.h bomberman.h propeller.h
 USER = dcnet
 
 all: kageserver ot_dissect
@@ -19,8 +19,8 @@ all: kageserver ot_dissect
 %.o: %.c $(DEPS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-kageserver: kageserver.o blowfish.o model.o discord.o log.o outtrigger.o bomberman.o
-	$(CXX) $(CXXFLAGS) -o $@ kageserver.o blowfish.o model.o discord.o log.o outtrigger.o bomberman.o -lpthread -ldcserver -Wl,-rpath,/usr/local/lib
+kageserver: kageserver.o blowfish.o model.o discord.o log.o outtrigger.o bomberman.o propeller.o
+	$(CXX) $(CXXFLAGS) -o $@ kageserver.o blowfish.o model.o discord.o log.o outtrigger.o bomberman.o propeller.o -lpthread -ldcserver -lsqlite3 -Wl,-rpath,/usr/local/lib
 
 ot_dissect: ot_dissect.o
 	$(CXX) $(CXXFLAGS) -o $@ ot_dissect.o
@@ -42,4 +42,6 @@ installservice: kage.service
 	mkdir -p /usr/lib/systemd/system/
 	cp $< /usr/lib/systemd/system/
 	mkdir -p $(localstatedir)/log/
+	mkdir -p $(localstatedir)/lib/kage
+	chown $USER:$USER $(localstatedir)/lib/kage
 	systemctl enable kage.service

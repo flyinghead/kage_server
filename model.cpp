@@ -63,7 +63,8 @@ void Player::send(Packet& packet)
 			// unreliable NOPs don't have a seq#
 			write32(packet.data, i + 8, unrelSeq++);
 		}
-		write32(packet.data, i + 4, id);
+		if (!(flags & Packet::FLAG_RELAY))
+			write32(packet.data, i + 4, id);
 		i += size;
 	}
 	if (rudpSeen)
@@ -598,7 +599,10 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				{
 					// Broadcast to other players in the lobby/room
 					relayPacket.init(Packet::REQ_CHAT);
-					relayPacket.flags |= Packet::FLAG_RUDP | (flags & (Packet::FLAG_LOBBY | Packet::FLAG_RELAY));
+					relayPacket.flags |= Packet::FLAG_RUDP | Packet::FLAG_RELAY | (flags & Packet::FLAG_LOBBY);
+					// relayed player id
+					memcpy(&relayPacket.data[relayPacket.startOffset + 4], &data[4], sizeof(uint32_t));
+					// message
 					relayPacket.writeData(&data[0x10], (flags & 0x3ff) - 0x10);
 
 					uint32_t seq = read32(data, 8);
@@ -620,7 +624,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			break;
 		}
 	case Packet::REQ_PING:
-		DEBUG_LOG(game, "REQ_PING");
+		//DEBUG_LOG(game, "REQ_PING");
 		// outtrigger and propA send a single value (clock)
 		// bomberman sends additional stuff but only cares about the first int32 in the response
 		replyPacket.respOK(Packet::REQ_PING);
@@ -632,6 +636,57 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		//dumpData(data + 0x10, len - 0x10);
 		player->setExtraData(data + 0x10, len - 0x10);
 		replyPacket.respOK(Packet::REQ_CHG_USER_PROP);
+		replyPacket.ack(read32(data, 8));
+		replyPacket.data[2] = data[2]; // propeller arena needs this (only checked for REQ_CHG_USER_PROP)
+		break;
+
+	case Packet::REG_QRY_ROOM_ATTR:
+		{
+			uint32_t roomId = read32(data, 0x10);
+			uint32_t attr = read32(data, 0x14);
+			DEBUG_LOG(game, "REG_QRY_ROOM_ATTR %x %c%c%c%c", roomId, attr >> 24, (attr >> 16) & 0xff, (attr >> 8) & 0xff, attr & 0xff);
+			Room *room = player->getRoom();
+			if (room == nullptr) {
+				replyPacket.respFailed(Packet::REQ_CHG_ROOM_STATUS);
+			}
+			else
+			{
+				replyPacket.init(Packet::REG_QRY_ROOM_ATTR);
+				replyPacket.writeData(roomId);
+				replyPacket.writeData(attr);
+				switch (attr)
+				{
+				case 0x4E414D45:	// NAME
+					replyPacket.writeData(room->getName().c_str(), 0x10);
+					break;
+				case 0x4D415849:	// MAXI
+					replyPacket.writeData(room->getMaxPlayers());
+					break;
+				case 0x53544154:	// STAT
+					replyPacket.writeData(room->getAttributes());
+					break;
+				case 0x55534552:	// USER
+					replyPacket.writeData(room->getPlayerCount());
+					break;
+				default:
+					replyPacket.reset();
+					replyPacket.respFailed(Packet::REQ_CHG_ROOM_STATUS);
+					break;
+				}
+			}
+			replyPacket.ack(read32(data, 8));
+			break;
+		}
+
+	case Packet::REQ_AUDIO_START:
+		DEBUG_LOG(game, "[%s] REQ_AUDIO_START", player->getName().c_str());
+		replyPacket.respOK(Packet::REQ_AUDIO_START);
+		replyPacket.ack(read32(data, 8));
+		break;
+
+	case Packet::REQ_AUDIO_STOP:
+		DEBUG_LOG(game, "[%s] REQ_AUDIO_STOP", player->getName().c_str());
+		replyPacket.respOK(Packet::REQ_AUDIO_STOP);
 		replyPacket.ack(read32(data, 8));
 		break;
 
@@ -707,7 +762,7 @@ Room::Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attribut
 	  owner(owner), server(lobby.getServer()), game(server.game)
 {
 	assert(name.length() <= 16);
-	addPlayer(owner);
+	addPlayer(owner);	// FIXME addPlayer is virtual. can't be called in constructor/destructor
 	openNetdump();
 }
 

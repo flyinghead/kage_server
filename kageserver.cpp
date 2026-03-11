@@ -18,6 +18,7 @@
 */
 #include "propa_auth.h"
 #include "propa_rank.h"
+#include "propeller.h"
 #include "model.h"
 #include "bomberman.h"
 #include "outtrigger.h"
@@ -31,6 +32,10 @@ extern "C" {
 #include <fstream>
 #include <sstream>
 
+#ifndef DATADIR
+#define DATADIR "."
+#endif
+
 static std::map<std::string, std::string> Config;
 
 class BootstrapServer : public Server
@@ -41,7 +46,7 @@ public:
 		  address(address),
 		  bombermanServer(BOMBERMAN_PORT, io_context),
 		  outtriggerServer(OUTTRIGGER_PORT, io_context),
-		  propellerServer(Game::PropellerA, PROPELLERA_PORT, io_context),
+		  propellerServer(PROPELLERA_PORT, io_context),
 		  statusTimer(io_context)
 	{
 	}
@@ -56,7 +61,7 @@ private:
 	uint32_t nextUserId = 0x1001;
 	BombermanServer bombermanServer;
 	OuttriggerServer outtriggerServer;
-	LobbyServer propellerServer;
+	PropellerServer propellerServer;
 	asio::steady_timer statusTimer;
 	static constexpr uint16_t BOMBERMAN_PORT = 9091;
 	static constexpr uint16_t OUTTRIGGER_PORT = 9092;
@@ -261,7 +266,12 @@ int main(int argc, char *argv[])
 	server.start();
 	AuthAcceptor authServer(io_context);
 	authServer.start();
-	RankAcceptor rankServer(io_context);
+
+	std::string dbpath = Config["DATADIR"];
+	if (dbpath.empty())
+		dbpath = DATADIR;
+	dbpath += "/propellerarena.db";
+	RankAcceptor rankServer(io_context, dbpath);
 	rankServer.start();
 	NOTICE_LOG(Game::None, "Kage server started");
 	try {
