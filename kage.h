@@ -22,6 +22,8 @@
 #include <stdexcept>
 #include <arpa/inet.h>
 
+extern std::string DataDir;
+
 void dumpData(const uint8_t *data, size_t len);
 
 enum class Game
@@ -65,6 +67,7 @@ public:
 		REQ_CHG_USER_STATUS = 0xd,
 		REQ_QRY_LOBBIES = 0xe,
 		REQ_CHAT = 0xf,
+		REQ_DM_CHAT = 0x10,
 		REQ_GAME_DATA = 0x11,
 		REQ_AUDIO_START = 0x12,
 		REQ_AUDIO_STOP = 0x13,

@@ -572,19 +572,27 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			}
 			else
 			{
-				uint32_t attributes = read32(data, 0x14);
-				room->setAttributes(attributes);
+				if (!memcmp(&data[0x10], "STAT", 4))
+				{
+					uint32_t attributes = read32(data, 0x14);
+					room->setAttributes(attributes);
 
-				// Notify other users
-				relayPacket.init(Packet::REQ_CHG_ROOM_STATUS);
-				relayPacket.writeData(room->getId());
-				relayPacket.writeData("STAT", 4);
-				relayPacket.writeData(attributes);
+					// Notify other users
+					relayPacket.init(Packet::REQ_CHG_ROOM_STATUS);
+					relayPacket.writeData(room->getId());
+					relayPacket.writeData("STAT", 4);
+					relayPacket.writeData(attributes);
 
-				replyPacket.respOK(Packet::REQ_CHG_ROOM_STATUS);
-				replyPacket.writeData(room->getId());
-				replyPacket.writeData("STAT", 4);
-				replyPacket.writeData(attributes);
+					replyPacket.respOK(Packet::REQ_CHG_ROOM_STATUS);
+					replyPacket.writeData(room->getId());
+					replyPacket.writeData("STAT", 4);
+					replyPacket.writeData(attributes);
+				}
+				else
+				{
+					ERROR_LOG(game, "CHG_ROOM_STATUS kind not implemented: %.4s", &data[0x10]);
+					replyPacket.respFailed(Packet::REQ_CHG_ROOM_STATUS);
+				}
 			}
 			replyPacket.ack(read32(data, 8));
 			break;
@@ -597,6 +605,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			{
 				if (flags & Packet::FLAG_RELAY)
 				{
+					DEBUG_LOG(game, "[%s] CHAT: %s", player->getName().c_str(), &data[0x10]);
 					// Broadcast to other players in the lobby/room
 					relayPacket.init(Packet::REQ_CHAT);
 					relayPacket.flags |= Packet::FLAG_RUDP | Packet::FLAG_RELAY | (flags & Packet::FLAG_LOBBY);
@@ -623,6 +632,57 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			}
 			break;
 		}
+
+	case Packet::REQ_DM_CHAT:
+		{
+			// a4 1c 00 10 00 00 10 01 00 00 00 14 00 00 00 00 ................
+			//             sender
+			// 00 00 00 01 00 00 10 02 41 42 43 00             ........ABC.
+			// dest count  dest[0]...  message
+			uint16_t flags = read16(data, 0);
+			replyPacket.init(Packet::REQ_NOP);
+			replyPacket.ack(read32(data, 8));
+
+			const std::vector<Player *> *players = nullptr;
+			if (flags & Packet::FLAG_LOBBY)
+			{
+				const Lobby *lobby = player->getLobby();
+				if (lobby != nullptr)
+					players = &lobby->getPlayers();
+			}
+			else
+			{
+				const Room *room = player->getRoom();
+				if (room != nullptr)
+					players = &room->getPlayers();
+			}
+			const int destCount = read32(data, 0x10);
+			DEBUG_LOG(game, "[%s] DM_CHAT: %s", player->getName().c_str(), &data[0x10 + (destCount + 1) * 4]);
+			if (players != nullptr)
+			{
+				for (int i = 0; i < destCount; i++)
+				{
+					const uint32_t dest = read32(data, 0x14 + i * sizeof(uint32_t));
+					for (Player *destPlayer : *players)
+					{
+						if (destPlayer->getId() == dest)
+						{
+							Packet packet;
+							packet.init(Packet::REQ_DM_CHAT);
+							packet.flags |= Packet::FLAG_RUDP | Packet::FLAG_RELAY | (flags & Packet::FLAG_LOBBY);
+							// relayed player id
+							memcpy(&packet.data[4], &data[4], sizeof(uint32_t));
+							// message
+							packet.writeData(data + 0x10, len - 0x10);
+							destPlayer->send(packet);
+							break;
+						}
+					}
+				}
+			}
+			break;
+		}
+
 	case Packet::REQ_PING:
 		//DEBUG_LOG(game, "REQ_PING");
 		// outtrigger and propA send a single value (clock)
@@ -842,6 +902,7 @@ void Room::openNetdump()
 
 	std::string fname = std::string(date) + "_" + name + ".dmp";
 	std::replace(fname.begin(), fname.end(), '/', '_');
+	fname += DataDir + "/" + fname;
 	netdump = fopen(fname.c_str(), "w");
 	if (netdump == nullptr)
 		WARN_LOG(game, "Can't open netdump file %s: error %d", fname.c_str(), errno);

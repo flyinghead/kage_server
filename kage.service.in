@@ -10,8 +10,6 @@ RestartSec=1
 User=INSTALL_USER
 ExecStart=SBINDIR/kageserver SYSCONFDIR/kage.cfg
 StandardOutput=append:LOCALSTATEDIR/log/kage.log
-# If dumping net data
-#WorkingDirectory=LOCALSTATEDIR/lib/kage
 
 [Install]
 WantedBy=multi-user.target

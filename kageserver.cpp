@@ -37,6 +37,7 @@ extern "C" {
 #endif
 
 static std::map<std::string, std::string> Config;
+std::string DataDir;
 
 class BootstrapServer : public Server
 {
@@ -261,17 +262,16 @@ int main(int argc, char *argv[])
 		ERROR_LOG(Game::None, "SERVER_IP not set in kage.cfg. Exiting");
 		return 1;
 	}
+	DataDir = Config["DATADIR"];
+	if (DataDir.empty())
+		DataDir = DATADIR;
 	asio::ip::address_v4 serverAddr = asio::ip::address_v4::from_string(serverIp);
 	BootstrapServer server(serverAddr, 9090, io_context);
 	server.start();
 	AuthAcceptor authServer(io_context);
 	authServer.start();
 
-	std::string dbpath = Config["DATADIR"];
-	if (dbpath.empty())
-		dbpath = DATADIR;
-	dbpath += "/propellerarena.db";
-	RankAcceptor rankServer(io_context, dbpath);
+	RankAcceptor rankServer(io_context, DataDir + "/propellerarena.db");
 	rankServer.start();
 	NOTICE_LOG(Game::None, "Kage server started");
 	try {

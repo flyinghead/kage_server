@@ -26,9 +26,10 @@ public:
 		uint8_t plane = 0;
 		uint8_t flags = 0;
 		uint8_t rank = 0;
-		std::array<uint8_t, 0x3c> data;
+		std::array<uint8_t, 0x3c> data {};
 		uint8_t score = 0;
 		uint16_t seqnum = 0;
+		bool inGame = false;
 
 		float flightDist = 0.f;
 		float flightTime = 0.f;
@@ -53,7 +54,8 @@ public:
 	void setStateData(int slot, const uint8_t *data);
 
 	const PlayerState& getPlayerState(int i) const { return playerState[i]; }
-	void gameStop();
+	void setInGame(Player *player, bool inGame);
+	void gameStop(Player *player);
 	void sendRankUpdates();
 	Packet sendPlayerList();
 	Packet sendRoomAttrs();

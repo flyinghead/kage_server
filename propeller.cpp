@@ -200,17 +200,23 @@ void PARoom::sendGameData(const std::error_code& ec)
 		return;
 
 	int slot = 0;
+	Packet packet;
 	while (slot < 6)
 	{
-		Packet packet;
 		packet.init(Packet::REQ_CHAT);
 		uint8_t *payload = &packet.data[packet.size];
 		packet.writeData(OUT_GAME_DATA);
 		packet.writeData((uint8_t)0);	// ff doesn't seem to change anything
 		packet.writeData((uint8_t)0);
 		packet.size += 0xec;
-		for (int idx = 0; idx < 3; idx++, slot++)
+		int idx = 0;
+		for (; idx < 3 && slot < 6; idx++, slot++)
 		{
+			if (playerState[slot].seqnum == 0) {
+				// no data received yet so skip it
+				idx--;
+				continue;
+			}
 			payload[0x2b + idx] = slot;
 			// score
 			payload[0x2e + idx] = playerState[slot].score;
@@ -218,8 +224,12 @@ void PARoom::sendGameData(const std::error_code& ec)
 			*(uint16_t *)&payload[0x32 + idx * 2] = ntohs(playerState[slot].seqnum);
 			memcpy(&payload[0x38 + idx * 0x3c], playerState[slot].data.data(), playerState[slot].data.size());
 		}
-		Player::sendToAll(packet, players);
+		if (idx < 3)
+			payload[0x2b + idx] = 0xff;
 	}
+	for (unsigned i = 0; i < players.size(); i++)
+		if (playerState[i].inGame)
+			players[i]->send(packet);
 
 	// The game seems to send a state every 4 frames
 	if (timer.expiry().time_since_epoch() != 0ms)
@@ -229,12 +239,29 @@ void PARoom::sendGameData(const std::error_code& ec)
 	timer.async_wait(std::bind(&PARoom::sendGameData, this, asio::placeholders::error));
 }
 
-void PARoom::gameStop()
+void PARoom::setInGame(Player *player, bool inGame) {
+	PlayerState& state = playerState[getPlayerIndex(player)];
+	state.inGame = inGame;
+}
+
+void PARoom::gameStop(Player *player)
 {
 	std::error_code ec;
 	timer.cancel(ec);
 	timerStarted = false;
 	startState = 0;
+
+	PlayerState& state = playerState[getPlayerIndex(player)];
+	state.data = {};
+	// Reset player ready flag
+	state.flags &= ~1;
+	state.score = 0;
+	state.seqnum = 0;
+	state.flightDist = 0.f;
+	state.flightTime = 0.f;
+	state.kills = 0;
+	state.deaths = 0;
+	state.wins = 0;
 }
 
 void PARoom::sendRankUpdates()
@@ -318,7 +345,8 @@ Packet PARoom::sendRngSeed()
 	Packet packet;
 	packet.init(Packet::REQ_CHAT);
 	packet.flags |= Packet::FLAG_RUDP;
-	packet.writeData((uint32_t)OUT_SET_RNG_SEED);
+	packet.writeData(OUT_SET_RNG_SEED);
+	packet.writeData("", 3);
 	packet.writeData(rngSeed);
 	return packet;
 }
@@ -441,14 +469,16 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 	switch (type)
 	{
 	case IN_SET_PLAYER_ATTRS: // Select plane, change player flags
+		// FIXME some players are setting all to 0 at game start (payload 0x44 bytes)
+		DEBUG_LOG(game, "[%s] SET_PLAYER_ATTRS %02x %02x %02x %02x %02x %02x %02x", player->getName().c_str(),
+				data[0x11], data[0x12], data[0x13], data[0x14], data[0x15], data[0x16], data[0x17]);
+		// [0] 00 00 08 01 10 00 00
+		// d[1] plane type (0)
+		// d[2] flags (1: ready | 2:has mike | 4)
+		// d[3] rank (8)
+		// d[4-7] playerId
+		if (*(uint32_t *)&data[0x14] == player->getId())
 		{
-			DEBUG_LOG(game, "[%s] SET_PLAYER_ATTRS %02x %02x %02x %02x %02x %02x %02x", player->getName().c_str(),
-					data[0x11], data[0x12], data[0x13], data[0x14], data[0x15], data[0x16], data[0x17]);
-			// [0] 00 00 08 01 10 00 00
-			// d[1] plane type (0)
-			// d[2] flags (1: ready | 2:has mike | 4)
-			// d[3] rank (8)
-			// d[4-7] playerId
 			room->setPlane(player, data[0x11]);
 			room->setPlayerFlags(player, data[0x12]);
 			room->setRank(player, data[0x13]);
@@ -456,24 +486,24 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			replyPacket.init(Packet::REQ_CHAT);
 			replyPacket.flags |= Packet::FLAG_RUDP;
 			replyPacket.ack(read32(data, 8));
-			replyPacket.writeData((uint32_t)OUT_ACK_PLAYER_ATTRS);
+			replyPacket.writeData(OUT_ACK_PLAYER_ATTRS);
+			replyPacket.writeData("", 3);
 			replyPacket.writeData(room->getOwner()->getId());
 			player->send(replyPacket);
-			replyPacket.reset();
 
-			Packet packet = room->sendPlayerList();
-			Player::sendToAll(packet, room->getPlayers());
-			break;
+			replyPacket = room->sendPlayerList();
+			relayPacket = room->sendPlayerList();
 		}
+		break;
 
 	case IN_GET_ROOM_ATTRS:
-		{
-			DEBUG_LOG(game, "[%s] GET ROOM ATTRS", player->getName().c_str());
-			replyPacket = room->sendRoomAttrs();
-			replyPacket.ack(read32(data, 8));
-			// FIXME owner gets network error after sending this *4 when game ends
-			break;
-		}
+		DEBUG_LOG(game, "[%s] GET ROOM ATTRS", player->getName().c_str());
+		replyPacket = room->sendRoomAttrs();
+		replyPacket.ack(read32(data, 8));
+		// FIXME owner gets network error after sending this *4 when game ends
+		// with 3+ players all guests fail after game with network error
+		break;
+
 	case IN_GAME_STARTING: // ready to start? from owner
 		{
 			// 02 01 01 00
@@ -521,103 +551,95 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		}
 
 	case IN_GAME_OVER: // End of game (sent by owner for ranking games)
-		{
-			DEBUG_LOG(game, "[%s] GAME OVER", player->getName().c_str());
-			// flags a000
-			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
-			player->send(replyPacket);
-			replyPacket.reset();
-			room->sendRankUpdates();
-			break;
-		}
+		DEBUG_LOG(game, "[%s] GAME OVER", player->getName().c_str());
+		// flags a000
+		replyPacket.init(Packet::REQ_NOP);
+		replyPacket.ack(read32(data, 8));
+		player->send(replyPacket);
+		replyPacket.reset();
+		room->sendRankUpdates();
+		break;
 
 	case IN_GAME_START:	// Start game
 		DEBUG_LOG(game, "[%s] gamedata[6] GAME START", player->getName().c_str());
+		room->setInGame(player, true);
 		// send rng seed
 		replyPacket = room->sendRngSeed();
 		replyPacket.ack(read32(data, 8));
+		player->send(replyPacket);
+		replyPacket.reset();
 		break;
 
 	case IN_GAME_STOP: // End game
-		{
-			DEBUG_LOG(game, "[%s] gamedata[7] GAME STOP", player->getName().c_str());
-			// flags a000
-			// 07 bf ef 0c
-			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
-			// Reset player ready flag?
-			room->setPlayerFlags(player, room->getPlayerState(room->getPlayerIndex(player)).flags & ~1);
-			room->gameStop();
-			break;
-		}
+		DEBUG_LOG(game, "[%s] gamedata[7] GAME STOP", player->getName().c_str());
+		// flags a000
+		// 07 bf ef 0c
+		room->setInGame(player, false);
+		replyPacket.init(Packet::REQ_NOP);
+		replyPacket.ack(read32(data, 8));
+		room->gameStop(player);
+		break;
 
 	case IN_GAME_CDATA: // in game data for AI/computer planes
-		{
-			//DEBUG_LOG(game, "[%s] gamedata[A] flags %4x slot %d", player->getName().c_str(), (data[0] >> 2) << 10, data[0x11]);
-			//dumpGameData(nullptr, data[0x11], data + 0x18);
-			// 0a 03 00 00 00 02 00 00 00 00 00 00 00 00 00 00 ................
-			//   slot
-			// 32 32 32 32 1e 1e 1e 1e ff ff ff ff ff ff ff ff 2222............
-			// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
-			// 00 00 00 00 00 a0 00 00 b3 e4 58 1b b3 e4 00 00 ..........X.....
-			// 00 00 00 00 ....
-			room->setStateData(data[0x11], data + 0x18);
-			break;
-		}
+		//DEBUG_LOG(game, "[%s] gamedata[A] flags %4x slot %d", player->getName().c_str(), (data[0] >> 2) << 10, data[0x11]);
+		//dumpGameData(nullptr, data[0x11], data + 0x18);
+		// 0a 03 00 00 00 02 00 00 00 00 00 00 00 00 00 00 ................
+		//   slot
+		// 32 32 32 32 1e 1e 1e 1e ff ff ff ff ff ff ff ff 2222............
+		// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
+		// 00 00 00 00 00 a0 00 00 b3 e4 58 1b b3 e4 00 00 ..........X.....
+		// 00 00 00 00 ....
+		room->setStateData(data[0x11], data + 0x18);
+		break;
 
-	case IN_GAME_HDATA2: // in game data for human planes (with audio?), len 6c
-		{
-			//DEBUG_LOG(game, "[%s] gamedata[B] flags %4x slot %d", player->getName().c_str(), (data[0] >> 2) << 10, data[0x11]);
-			//dumpData(data + 0x10, len - 0x10);
-			dumpGameData(player, data[0x11], data + 0x40);
-			// 0b 00 00 00 00 69 00 00 00 00 00 00 00 00 00 00 .....i..........
-			//               seq
-			// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
-			// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
-			// 00 00 00 00 00 00 00 00 34 32 34 32 1e 1e 1e 1e ........4242....
-			// same as C[8]
-			// ff ff ff ff ff ff ff ff 00 00 00 00 00 00 01 01 ................
-			// 00 00 00 00 00 00 00 00 ff 00 5e f2 62 03 ce ff ..........^.b...
-			// 78 fe 9d 1a 46 01 00 00 00 00 00 00             x...F.......
-			room->setStateData(data[0x11], data + 0x40);
-			break;
-		}
+	case IN_GAME_HDATA2: // in game data for human planes (with audio? doesn't look like it), len 6c
+		//DEBUG_LOG(game, "[%s] gamedata[B] flags %4x slot %d", player->getName().c_str(), (data[0] >> 2) << 10, data[0x11]);
+		//dumpData(data + 0x10, len - 0x10);
+		//dumpGameData(player, data[0x11], data + 0x40);
+		// 0b 00 00 00 00 69 00 00 00 00 00 00 00 00 00 00 .....i..........
+		//               seq
+		// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
+		// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
+		// 00 00 00 00 00 00 00 00 34 32 34 32 1e 1e 1e 1e ........4242....
+		// same as C[8]
+		// ff ff ff ff ff ff ff ff 00 00 00 00 00 00 01 01 ................
+		// 00 00 00 00 00 00 00 00 ff 00 5e f2 62 03 ce ff ..........^.b...
+		// 78 fe 9d 1a 46 01 00 00 00 00 00 00             x...F.......
+		room->setStateData(data[0x11], data + 0x40);
+		break;
 
 	case IN_GAME_HDATA: // in game data for human planes
-		{
-			//DEBUG_LOG(game, "[%s] gamedata[C] flags %4x slot %d", player->getName().c_str(), (data[0] >> 2) << 10, data[0x11]);
-			//dumpData(data + 0x10, len - 0x10);
-			dumpGameData(player, data[0x11], data + 0x18);
-			// 0c 01 00 00 00 01 00 00 00 00 00 00 00 00 00 00 ................
-			//   slot        seq       plane data...
-			// 32 32 32 32 1e 1e 1e 1e ff ff ff ff ff ff ff ff 2222............
-			//             constants   constants
-			// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
-			// constants   constants
-			// ff 00 00 00 00 80 00 00 00 00 58 1b 21 d9 00 00 ..........X.!...
-			// by    short short short short short short
-			// 8ae   pl[c] pl[d] pl[e] p[51] p[52] p[53]        c,d,e: angles, 51,52,53: position?
-			// 00 00 00 00 ....
-			// long (flag?)
-			// matches handle 1C/1D
-			room->setStateData(data[0x11], data + 0x18);
-			break;
-		}
+		//DEBUG_LOG(game, "[%s] gamedata[C] flags %4x slot %d", player->getName().c_str(), (data[0] >> 2) << 10, data[0x11]);
+		//dumpData(data + 0x10, len - 0x10);
+		//dumpGameData(player, data[0x11], data + 0x18);
+		// 0c 01 00 00 00 01 00 00 00 00 00 00 00 00 00 00 ................
+		//   slot        seq       plane data...
+		// 32 32 32 32 1e 1e 1e 1e ff ff ff ff ff ff ff ff 2222............
+		//             constants   constants
+		// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
+		// constants   constants
+		// ff 00 00 00 00 80 00 00 00 00 58 1b 21 d9 00 00 ..........X.!...
+		// by    short short short short short short
+		// 8ae   pl[c] pl[d] pl[e] p[51] p[52] p[53]        c,d,e: angles, 51,52,53: position?
+		// 00 00 00 00 ....
+		// long (flag?)
+		// matches handle 1C/1D
+		room->setStateData(data[0x11], data + 0x18);
+		break;
 
 	case IN_GAME_ENDED: // Game ended, sent by all players
 		DEBUG_LOG(game, "[%s] gamedata[E] GAME ENDED", player->getName().c_str());
 		// flags a000
 		// 0e 00 ef 0c 00 00 00 0c 00 00 23 28 02 00 00 00 ..........#(....
-		// 0a 20 0c 0c 38 bf ef 0c 60 29 0c 0c . ..8...`)..
+		// 0a 20 0c 0c 38 bf ef 0c 60 29 0c 0c             . ..8...`)..
 		//
 		// 0e 01 ef 0c 00 00 00 00 00 00 00 12 02 00 00 00 ................
-		//   slot?
+		//   slot
 		// 0a 20 0c 0c 38 bf ef 0c 60 29 0c 0c             . ..8...`)..
 		//
 		// 0e 01 ef 0c 00 00 00 00 00 00 00 0a 02 00 00 00 ................
 		//    u8       int.BE..... int.BE.....
-		// 0a 20 0c 0c 38 bf ef 0c 60 29 0c 0c . ..8...`)..
+		// 0a 20 0c 0c 38 bf ef 0c 60 29 0c 0c             . ..8...`)..
 		replyPacket.init(Packet::REQ_NOP);
 		replyPacket.ack(read32(data, 8));
 		break;
