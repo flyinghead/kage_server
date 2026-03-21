@@ -197,7 +197,7 @@ void BootstrapServer::onUpdateTimer(const std::error_code& ec)
 		ERROR_LOG(Game::None, "statusCommit failed: %s", e.what());
 	}
 
-	statusTimer.expires_at(asio::chrono::steady_clock::now() + asio::chrono::seconds(statusGetInterval()));
+	statusTimer.expires_after(asio::chrono::seconds(statusGetInterval()));
 	statusTimer.async_wait(std::bind(&BootstrapServer::onUpdateTimer, this, asio::placeholders::error));
 }
 

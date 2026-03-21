@@ -176,13 +176,13 @@ LobbyServer::LobbyServer(Game game, uint16_t port, asio::io_context& io_context)
 
 {
 	lobbies.reserve(10);
-	addLobby("ShuMania");
+	addLobby("DCNet");
 	startTimer();
 }
 
 void LobbyServer::startTimer()
 {
-	timer.expires_at(Clock::now() + 30s);
+	timer.expires_after(30s);
 	timer.async_wait([this](const std::error_code& ec) {
 		if (ec)
 			return;

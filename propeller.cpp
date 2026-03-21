@@ -305,14 +305,23 @@ Packet PARoom::sendPlayerList()
 	packet.writeData(startState);	// TODO 1 or 2: if 1, sets DAT_0c5a5fa4 causing msg 6 to be sent when value 2 is received (start game?)
 
 	uint8_t pdata[14] {};
+	// Human planes
 	for (unsigned i = 0; i < players.size(); i++)
 	{
 		const PARoom::PlayerState& state = playerState[i];
 		unsigned shift = (i & 1) * 4;
 		pdata[i / 2 + 0] |= state.plane << shift;
 		pdata[i / 2 + 3] |= state.flags << shift;
-		pdata[i / 2 + 6] |= i << shift; // TODO slot?
+		pdata[i / 2 + 6] |= i << shift; 	// slot
 		pdata[i / 2 + 9] |= state.rank << shift;
+	}
+	// AI planes
+	for (unsigned i = players.size(); i < 6; i++)
+	{
+		unsigned shift = (i & 1) * 4;
+		pdata[i / 2 + 0] |= 0 << shift;			// TODO? plane
+		// controlling slot for AI planes: assign to each player in a round-robin fashion
+		pdata[i / 2 + 6] |= ((i - players.size()) % players.size()) << shift;
 	}
 	packet.writeData(pdata, sizeof(pdata));
 	for (unsigned i = 0; i < 6; i++)
@@ -689,6 +698,13 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 
 void RankConnection::onReceive(const std::error_code& ec, size_t len)
 {
+	if (ec || len == 0)
+	{
+		if (ec && ec != asio::error::eof)
+			ERROR_LOG(Game::PropellerA, "rank: %s", ec.message().c_str());
+		socket.shutdown(asio::ip::tcp::socket::shutdown_both);
+		return;
+	}
 	if (len >= 0x34)
 	{
 		std::string username = (const char *)&recvBuffer[0x14];
