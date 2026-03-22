@@ -897,12 +897,28 @@ void Room::openNetdump()
 	time_t now = time(nullptr);
 	struct tm tm = *localtime(&now);
 
-	char date[16];
-	sprintf(date, "%02d_%02d-%02d-%02d", tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+	const char *gameId = "";
+	switch (game)
+	{
+	case Game::Bomberman:
+		gameId = "BM";
+		break;
+	case Game::Outtrigger:
+		gameId = "OT";
+		break;
+	case Game::PropellerA:
+		gameId = "PA";
+		break;
+	default:
+		gameId = "";
+		break;
+	}
+	char date[32];
+	sprintf(date, "%02d_%02d-%02d-%02d_%s_", tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, gameId);
 
-	std::string fname = std::string(date) + "_" + name + ".dmp";
+	std::string fname = std::string(date) + name + ".dmp";
 	std::replace(fname.begin(), fname.end(), '/', '_');
-	fname += DataDir + "/" + fname;
+	fname = DataDir + "/" + fname;
 	netdump = fopen(fname.c_str(), "w");
 	if (netdump == nullptr)
 		WARN_LOG(game, "Can't open netdump file %s: error %d", fname.c_str(), errno);
