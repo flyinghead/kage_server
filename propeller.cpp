@@ -23,30 +23,6 @@
 
 using namespace std::chrono_literals;
 
-enum PropMessages : uint8_t
-{
-	IN_SET_PLAYER_ATTRS = 0,
-	IN_GET_ROOM_ATTRS = 1,
-	IN_GAME_STARTING = 2,
-	IN_SET_ROOM_ATTRS = 3,
-	IN_GAME_OVER = 4,
-	IN_GAME_START = 6,
-	IN_GAME_STOP = 7,
-	IN_GAME_CDATA = 0xa,
-	IN_GAME_HDATA2 = 0xb,
-	IN_GAME_HDATA = 0xc,
-	IN_GAME_ENDED = 0xe,
-
-	OUT_SET_PLAYER_ATTRS = 0xf,
-	OUT_PLAYER_LIST = 0x10,
-	OUT_SET_ROOM_ATTRS = 0x12,
-	OUT_SET_RNG_SEED = 0x13,
-	OUT_ACK_PLAYER_ATTRS = 0x18,
-	OUT_GAME_DATA = 0x1c,
-	OUT_GAME_DATA2 = 0x1d,
-	OUT_UPDATE_SCORE = 0x1e,
-};
-
 bool PARoom::removePlayer(Player *player)
 {
 	bool ownerLeft = player == owner;
@@ -127,7 +103,10 @@ void PARoom::setStateData(int slot, const uint8_t *data)
 			if (killerSlot != 0xff)
 			{
 				std::string killer;
-				if (killerSlot < (int)players.size())
+				if (killerSlot == slot) {
+					killer = "himself";
+				}
+				else if (killerSlot < (int)players.size())
 				{
 					killer = players[killerSlot]->getName();
 					playerState[killerSlot].score++;

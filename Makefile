@@ -11,7 +11,7 @@ CXXFLAGS = $(CFLAGS) -std=c++17
 DEPS = blowfish.h model.h propa_rank.h discord.h log.h kage.h propa_auth.h outtrigger.h bomberman.h propeller.h
 USER = dcnet
 
-all: kageserver ot_dissect
+all: kageserver ot_dissect pa_dissect
 
 %.o: %.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
@@ -25,8 +25,11 @@ kageserver: kageserver.o blowfish.o model.o discord.o log.o outtrigger.o bomberm
 ot_dissect: ot_dissect.o
 	$(CXX) $(CXXFLAGS) -o $@ ot_dissect.o
 
+pa_dissect: pa_dissect.o
+	$(CXX) $(CXXFLAGS) -o $@ pa_dissect.o
+
 clean:
-	rm -f *.o kageserver ot_dissect kage.service
+	rm -f *.o kageserver ot_dissect pa_dissect kage.service
 
 install: all
 	mkdir -p $(DESTDIR)$(sbindir)
