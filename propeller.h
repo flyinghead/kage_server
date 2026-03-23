@@ -50,10 +50,10 @@ public:
 		uint8_t plane = 0;
 		uint8_t flags = 0;
 		uint8_t rank = 0;
-		std::array<uint8_t, 0x3c> data {};
 		uint8_t score = 0;
-		uint16_t seqnum = 0;
+		std::array<uint8_t, 0x3c> data {};
 		bool inGame = false;
+		uint16_t seqnum = 0;
 
 		float flightDist = 0.f;
 		float flightTime = 0.f;
@@ -84,6 +84,7 @@ public:
 	Packet sendPlayerList();
 	Packet sendRoomAttrs();
 	Packet sendRngSeed();
+	void resetState();
 
 private:
 	void sendGameData(const std::error_code& ec);

@@ -91,7 +91,7 @@ void PARoom::setStateData(int slot, const uint8_t *data)
 		if (data[0x18 + i] == 3)
 		{
 			shotdown = true;
-			playerState[slot].deaths++;
+			state.deaths++;
 			std::string killed;
 			if (slot < (int)players.size()) {
 				killed = players[slot]->getName();
@@ -159,14 +159,14 @@ void PARoom::setStateData(int slot, const uint8_t *data)
 			prev = data[8 + i - 1];
 		if (prev != data[8 + i])
 		{
-			playerState[slot].flightTime += 0.033333f;	// 33.3 ms flight time per frame
+			state.flightTime += 0.033333f;	// 33.3 ms flight time per frame
 			// min speed: 151 mph, normal speed: 226 mph
-			playerState[slot].flightDist += 0.033333f * 151.f * (1 + (data[8 + i] >> 1) / 32.f) / 3600.f;
+			state.flightDist += 0.033333f * 151.f * (1 + (data[8 + i] >> 1) / 32.f) / 3600.f;
 		}
 	}
 
-	memcpy(playerState[slot].data.data(), data, playerState[slot].data.size());
-	playerState[slot].seqnum++;
+	memcpy(state.data.data(), data, state.data.size());
+	state.seqnum++;
 	if (!timerStarted) {
 		timerStarted = true;
 		sendGameData({});
@@ -191,17 +191,18 @@ void PARoom::sendGameData(const std::error_code& ec)
 		int idx = 0;
 		for (; idx < 3 && slot < 6; idx++, slot++)
 		{
-			if (playerState[slot].seqnum == 0) {
+			PlayerState& state = playerState[slot];
+			if (state.seqnum == 0) {
 				// no data received yet so skip it
 				idx--;
 				continue;
 			}
 			payload[0x2b + idx] = slot;
 			// score
-			payload[0x2e + idx] = playerState[slot].score;
+			payload[0x2e + idx] = state.score;
 			// state seqnum
-			*(uint16_t *)&payload[0x32 + idx * 2] = ntohs(playerState[slot].seqnum);
-			memcpy(&payload[0x38 + idx * 0x3c], playerState[slot].data.data(), playerState[slot].data.size());
+			*(uint16_t *)&payload[0x32 + idx * 2] = ntohs(state.seqnum);
+			memcpy(&payload[0x38 + idx * 0x3c], state.data.data(), state.data.size());
 		}
 		if (idx < 3)
 			payload[0x2b + idx] = 0xff;
@@ -231,16 +232,24 @@ void PARoom::gameStop(Player *player)
 	startState = 0;
 
 	PlayerState& state = playerState[getPlayerIndex(player)];
-	state.data = {};
 	// Reset player ready flag
 	state.flags &= ~1;
-	state.score = 0;
-	state.seqnum = 0;
-	state.flightDist = 0.f;
-	state.flightTime = 0.f;
-	state.kills = 0;
-	state.deaths = 0;
-	state.wins = 0;
+}
+
+void PARoom::resetState()
+{
+	for (PlayerState& state : playerState)
+	{
+		state.data = {};
+		state.seqnum = 0;
+
+		state.score = 0;
+		state.flightDist = 0.f;
+		state.flightTime = 0.f;
+		state.kills = 0;
+		state.deaths = 0;
+		state.wins = 0;
+	}
 }
 
 void PARoom::sendRankUpdates()
@@ -496,14 +505,14 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		{
 			// 02 01 01 00
 			// 02 00 02 00
-			// 02 01 01 00
-			// 02 00 02 00
 			DEBUG_LOG(game, "[%s] gamedata[2] %02x %02x %02x", player->getName().c_str(), data[0x11], data[0x12], data[0x13]);
 			replyPacket.init(Packet::REQ_NOP);
 			replyPacket.ack(read32(data, 8));
 			player->send(replyPacket);
 			replyPacket.reset();
 
+			if (data[0x12] == 1)
+				room->resetState();
 			room->setStartState(data[0x12]);
 
 			Packet packet = room->sendPlayerList();
@@ -545,6 +554,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		replyPacket.ack(read32(data, 8));
 		player->send(replyPacket);
 		replyPacket.reset();
+		room->gameStop(player);
 		room->sendRankUpdates();
 		break;
 
@@ -630,6 +640,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		// 0a 20 0c 0c 38 bf ef 0c 60 29 0c 0c             . ..8...`)..
 		replyPacket.init(Packet::REQ_NOP);
 		replyPacket.ack(read32(data, 8));
+		room->gameStop(player);
 		break;
 
 
