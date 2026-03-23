@@ -146,9 +146,14 @@ public:
 	uint32_t getId() const {
 		return id;
 	}
+
 	const std::string& getName() const {
 		return name;
 	}
+	void setName(const std::string& name) {
+		this->name = name;
+	}
+
 	Player *getOwner() const {
 		return owner;
 	}

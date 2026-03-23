@@ -22,7 +22,7 @@ const char *commandName(int cmd)
 	{
 	case Packet::REQ_NOP: return "NOP";
 	case Packet::REQ_CHAT: return "CHAT";
-	case Packet::REQ_CHG_ROOM_STATUS: return "CHG ROOM STATUS";
+	case Packet::REQ_CHG_ROOM_ATTR: return "CHG ROOM ATTR";
 	case Packet::REQ_CHG_USER_STATUS: return "CHG USER STATUS";
 	case Packet::REQ_CHG_USER_PROP: return "CHG USER PROP";
 	case Packet::REQ_CREATE_ROOM: return "CREATE ROOM";
@@ -107,8 +107,8 @@ int main(int argc, char *argv[])
 				else
 					printf("CHAT sysdata\n");
 				break;
-			case Packet::REQ_CHG_ROOM_STATUS:
-				printf("CHG ROOM STATUS %x\n", read32(data, 0x14));
+			case Packet::REQ_CHG_ROOM_ATTR:
+				printf("CHG ROOM ATTR %x\n", read32(data, 0x14));
 				break;
 			case Packet::REQ_CHG_USER_STATUS:
 				printf("CHG USER STATUS %x\n", read32(data, 0x10));

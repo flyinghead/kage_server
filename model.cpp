@@ -20,6 +20,7 @@
 #include "discord.h"
 #include "log.h"
 #include <algorithm>
+#include <cctype>
 
 using namespace std::chrono_literals;
 
@@ -456,7 +457,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				replyPacket.ack(read32(data, 8));
 
 				// Push room status to new player
-				replyPacket.init(Packet::REQ_CHG_ROOM_STATUS);
+				replyPacket.init(Packet::REQ_CHG_ROOM_ATTR);
 				replyPacket.writeData(room->getId());
 				replyPacket.writeData("STAT", 4);
 				replyPacket.writeData(room->getAttributes());
@@ -555,7 +556,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				replyPacket.writeData(room->getId());
 				replyPacket.ack(read32(data, 8));
 
-				replyPacket.init(Packet::REQ_CHG_ROOM_STATUS);
+				replyPacket.init(Packet::REQ_CHG_ROOM_ATTR);
 				replyPacket.writeData(room->getId());
 				replyPacket.writeData("STAT", 4);
 				replyPacket.writeData(attributes);
@@ -564,11 +565,11 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			}
 			break;
 		}
-	case Packet::REQ_CHG_ROOM_STATUS:
+	case Packet::REQ_CHG_ROOM_ATTR:
 		{
 			Room *room = player->getRoom();
 			if (room == nullptr) {
-				replyPacket.respFailed(Packet::REQ_CHG_ROOM_STATUS);
+				replyPacket.respFailed(Packet::REQ_CHG_ROOM_ATTR);
 			}
 			else
 			{
@@ -576,23 +577,40 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				{
 					uint32_t attributes = read32(data, 0x14);
 					room->setAttributes(attributes);
-
-					// Notify other users
-					relayPacket.init(Packet::REQ_CHG_ROOM_STATUS);
-					relayPacket.writeData(room->getId());
-					relayPacket.writeData("STAT", 4);
-					relayPacket.writeData(attributes);
-
-					replyPacket.respOK(Packet::REQ_CHG_ROOM_STATUS);
-					replyPacket.writeData(room->getId());
-					replyPacket.writeData("STAT", 4);
-					replyPacket.writeData(attributes);
+				}
+				else if (!memcmp(&data[0x10], "NAME", 4))
+				{
+					std::string name = (const char *)&data[0x14];
+					room->setName(name);
+				}
+				else if (!memcmp(&data[0x10], "MAXI", 4))
+				{
+					uint32_t maxPlayers = read32(data, 0x14);
+					room->setMaxPlayers(maxPlayers);
 				}
 				else
 				{
-					ERROR_LOG(game, "CHG_ROOM_STATUS kind not implemented: %.4s", &data[0x10]);
-					replyPacket.respFailed(Packet::REQ_CHG_ROOM_STATUS);
+					ERROR_LOG(game, "CHG_ROOM_ATTR kind not implemented: %.4s", &data[0x10]);
+					replyPacket.respFailed(Packet::REQ_CHG_ROOM_ATTR);
+					replyPacket.ack(read32(data, 8));
+					break;
 				}
+				// Notify other users
+				relayPacket.init(Packet::REQ_CHG_ROOM_ATTR);
+				relayPacket.writeData(room->getId());
+				relayPacket.writeData(&data[0x10], 4);
+				if (!memcmp(&data[0x10], "NAME", 4))
+					relayPacket.writeData(&data[0x14], 0x10);
+				else
+					relayPacket.writeData(&data[0x14], 4);
+
+				replyPacket.respOK(Packet::REQ_CHG_ROOM_ATTR);
+				replyPacket.writeData(room->getId());
+				replyPacket.writeData(&data[0x10], 4);
+				if (!memcmp(&data[0x10], "NAME", 4))
+					replyPacket.writeData(&data[0x14], 0x10);
+				else
+					replyPacket.writeData(&data[0x14], 4);
 			}
 			replyPacket.ack(read32(data, 8));
 			break;
@@ -700,18 +718,18 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		replyPacket.data[2] = data[2]; // propeller arena needs this (only checked for REQ_CHG_USER_PROP)
 		break;
 
-	case Packet::REG_QRY_ROOM_ATTR:
+	case Packet::REQ_QRY_ROOM_ATTR:
 		{
 			uint32_t roomId = read32(data, 0x10);
 			uint32_t attr = read32(data, 0x14);
 			DEBUG_LOG(game, "REG_QRY_ROOM_ATTR %x %c%c%c%c", roomId, attr >> 24, (attr >> 16) & 0xff, (attr >> 8) & 0xff, attr & 0xff);
 			Room *room = player->getRoom();
 			if (room == nullptr) {
-				replyPacket.respFailed(Packet::REQ_CHG_ROOM_STATUS);
+				replyPacket.respFailed(Packet::REQ_QRY_ROOM_ATTR);
 			}
 			else
 			{
-				replyPacket.init(Packet::REG_QRY_ROOM_ATTR);
+				replyPacket.init(Packet::REQ_QRY_ROOM_ATTR);
 				replyPacket.writeData(roomId);
 				replyPacket.writeData(attr);
 				switch (attr)
@@ -730,7 +748,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					break;
 				default:
 					replyPacket.reset();
-					replyPacket.respFailed(Packet::REQ_CHG_ROOM_STATUS);
+					replyPacket.respFailed(Packet::REQ_QRY_ROOM_ATTR);
 					break;
 				}
 			}
@@ -749,6 +767,58 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		replyPacket.respOK(Packet::REQ_AUDIO_STOP);
 		replyPacket.ack(read32(data, 8));
 		break;
+
+	case Packet::REQ_SEARCH_USERS:
+		{
+			// 0000   b0 28 00 25 00 00 10 02 00 00 00 07 00 00 00 00   .(.%............
+			// 0010   48 4f 4d 45 00 00 00 00 00 00 00 00 00 00 00 00   HOME............
+			//        searched name
+			// 0020   00 00 00 04 00 00 00 06 ba 47 66 10               .........Gf.
+			//        length      constant
+			// expects:
+			// u32		(ignored)
+			// u32		error code (0: success)
+			// u32		player count
+			// {
+			//  char[16]	player name
+			//  u32			player id
+			//  u32			lobby id
+			//  u32			room id or 0
+			//  u32			extra data size
+			//  [...		extra data] (not used)
+			// }
+			std::string name(&data[0x10], &data[0x20]);
+			name.resize(read32(data, 0x20));
+			std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c){ return std::tolower(c); });
+			DEBUG_LOG(game, "[%s] REQ_SEARCH_USERS: %s", player->getName().c_str(), name.c_str());
+			replyPacket.init(Packet::REQ_SEARCH_USERS);
+			if (data[0] & 0x10)
+				replyPacket.flags |= Packet::FLAG_LOBBY;
+			replyPacket.ack(read32(data, 8));
+			replyPacket.writeData(0u);
+			replyPacket.writeData(0u);
+			uint16_t countOffset = replyPacket.size;
+			replyPacket.writeData(0u); // will get updated
+			int count = 0;
+			for (const auto& [endpoint, pl] : players)
+			{
+				std::string pname = pl->getName().substr(0, name.size());
+				std::transform(pname.begin(), pname.end(), pname.begin(), [](unsigned char c){ return std::tolower(c); });
+				if (pname == name)
+				{
+					replyPacket.writeData(pl->getName().c_str(), 0x10);
+					replyPacket.writeData(pl->getId());
+					replyPacket.writeData(pl->getLobby() != nullptr ? pl->getLobby()->getId() : 0u);
+					replyPacket.writeData(pl->getRoom() != nullptr ? pl->getRoom()->getId() : 0u);
+					const auto& extra = player->getExtraData();
+					replyPacket.writeData((uint32_t)extra.size());
+					replyPacket.writeData(extra.data(), extra.size());
+					count++;
+				}
+			}
+			write32(replyPacket.data, countOffset, count);
+			break;
+		}
 
 	case Packet::REQ_NOP:
 		break;
