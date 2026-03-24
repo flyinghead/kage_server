@@ -36,13 +36,15 @@ bool PARoom::removePlayer(Player *player)
 	for (int i = index; i < 5; i++)
 		playerState[i] = playerState[i + 1];
 
-	Packet packet = sendPlayerList();
+	Packet packet;
+	sendPlayerList(packet);
 	Player::sendToAll(packet, players);
 
 	if (ownerLeft)
 	{
 		// Notify of new room master
-		Packet packet = sendRoomAttrs();
+		Packet packet;
+		sendRoomAttrs(packet);
 		Player::sendToAll(packet, players);
 	}
 
@@ -284,9 +286,8 @@ void PARoom::sendRankUpdates()
 	}
 }
 
-Packet PARoom::sendPlayerList()
+void PARoom::sendPlayerList(Packet& packet)
 {
-	Packet packet;
 	packet.init(Packet::REQ_CHAT);
 	packet.flags |= Packet::FLAG_RUDP;
 	packet.writeData(OUT_PLAYER_LIST);
@@ -317,12 +318,10 @@ Packet PARoom::sendPlayerList()
 			packet.writeData(players[i]->getId());
 		else
 			packet.writeData(~0u);
-	return packet;
 }
 
-Packet PARoom::sendRoomAttrs()
+void PARoom::sendRoomAttrs(Packet& packet)
 {
-	Packet packet;
 	packet.init(Packet::REQ_CHAT);
 	packet.flags |= Packet::FLAG_RUDP;
 	packet.writeData(OUT_SET_ROOM_ATTRS);
@@ -334,18 +333,15 @@ Packet PARoom::sendRoomAttrs()
 	const uint8_t owner = 1 << getPlayerIndex(this->owner);
 	packet.writeData(owner);
 	packet.writeData((uint8_t)0xac);
-	return packet;
 }
 
-Packet PARoom::sendRngSeed()
+void PARoom::sendRngSeed(Packet& packet)
 {
-	Packet packet;
 	packet.init(Packet::REQ_CHAT);
 	packet.flags |= Packet::FLAG_RUDP;
 	packet.writeData(OUT_SET_RNG_SEED);
 	packet.writeData("", 3);
 	packet.writeData(rngSeed);
-	return packet;
 }
 
 Room *PropellerServer::addRoom(const std::string& name, uint32_t attributes, Player *owner)
@@ -486,16 +482,15 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			replyPacket.writeData(OUT_ACK_PLAYER_ATTRS);
 			replyPacket.writeData("", 3);
 			replyPacket.writeData(room->getOwner()->getId());
-			player->send(replyPacket);
 
-			replyPacket = room->sendPlayerList();
-			relayPacket = room->sendPlayerList();
+			room->sendPlayerList(replyPacket);
+			room->sendPlayerList(relayPacket);
 		}
 		break;
 
 	case IN_GET_ROOM_ATTRS:
 		DEBUG_LOG(game, "[%s] GET ROOM ATTRS", player->getName().c_str());
-		replyPacket = room->sendRoomAttrs();
+		room->sendRoomAttrs(replyPacket);
 		replyPacket.ack(read32(data, 8));
 		// FIXME owner gets network error after sending this *4 when game ends
 		// with 3+ players all guests fail after game with network error
@@ -506,17 +501,14 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			// 02 01 01 00
 			// 02 00 02 00
 			DEBUG_LOG(game, "[%s] gamedata[2] %02x %02x %02x", player->getName().c_str(), data[0x11], data[0x12], data[0x13]);
-			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
-			player->send(replyPacket);
-			replyPacket.reset();
 
 			if (data[0x12] == 1)
 				room->resetState();
 			room->setStartState(data[0x12]);
 
-			Packet packet = room->sendPlayerList();
-			Player::sendToAll(packet, room->getPlayers());
+			room->sendPlayerList(replyPacket);
+			replyPacket.ack(read32(data, 8));
+			room->sendPlayerList(relayPacket);
 			break;
 		}
 
@@ -537,13 +529,9 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			DEBUG_LOG(game, "[%s] gamedata[3] %02x %02x %02x %02x %02x %02x %02x", player->getName().c_str(),
 					data[0x11], data[0x12], data[0x13], data[0x14], data[0x15], data[0x16], data[0x17]);
 			room->updateSettings(data[0x11] & 0xf, data[0x11] >> 4, data[0x14], data[0x12], data[0x13]);
-			replyPacket.init(Packet::REQ_NOP);
+			room->sendRoomAttrs(replyPacket);
 			replyPacket.ack(read32(data, 8));
-			player->send(replyPacket);
-			replyPacket.reset();
-
-			Packet packet = room->sendRoomAttrs();
-			Player::sendToAll(packet, room->getPlayers(), room->getOwner());
+			room->sendRoomAttrs(relayPacket);
 			break;
 		}
 
@@ -552,8 +540,6 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		// flags a000
 		replyPacket.init(Packet::REQ_NOP);
 		replyPacket.ack(read32(data, 8));
-		player->send(replyPacket);
-		replyPacket.reset();
 		room->gameStop(player);
 		room->sendRankUpdates();
 		break;
@@ -562,10 +548,8 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		DEBUG_LOG(game, "[%s] gamedata[6] GAME START", player->getName().c_str());
 		room->setInGame(player, true);
 		// send rng seed
-		replyPacket = room->sendRngSeed();
+		room->sendRngSeed(replyPacket);
 		replyPacket.ack(read32(data, 8));
-		player->send(replyPacket);
-		replyPacket.reset();
 		break;
 
 	case IN_GAME_STOP: // End game

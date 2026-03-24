@@ -117,6 +117,9 @@ void Player::resendTimer(const std::error_code& ec)
 
 void Player::ackRUdp(uint32_t seq)
 {
+	if (ackedRelSeq >= (int)seq)
+		// already ack'ed
+		return;
 	ackedRelSeq = seq;
 	std::error_code ec;
 	timer.cancel(ec);

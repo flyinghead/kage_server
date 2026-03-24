@@ -46,5 +46,5 @@ installservice: kage.service
 	cp $< /usr/lib/systemd/system/
 	mkdir -p $(localstatedir)/log/
 	mkdir -p $(localstatedir)/lib/kage
-	chown $USER:$USER $(localstatedir)/lib/kage
+	chown $(USER):$(USER) $(localstatedir)/lib/kage
 	systemctl enable kage.service

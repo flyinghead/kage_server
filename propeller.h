@@ -81,9 +81,9 @@ public:
 	void setInGame(Player *player, bool inGame);
 	void gameStop(Player *player);
 	void sendRankUpdates();
-	Packet sendPlayerList();
-	Packet sendRoomAttrs();
-	Packet sendRngSeed();
+	void sendPlayerList(Packet& packet);
+	void sendRoomAttrs(Packet& packet);
+	void sendRngSeed(Packet& packet);
 	void resetState();
 
 private:
