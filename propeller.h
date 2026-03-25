@@ -52,11 +52,11 @@ public:
 		uint8_t rank = 0;
 		uint8_t score = 0;
 		std::array<uint8_t, 0x3c> data {};
+		bool rankUpdated = false;
 		bool inGame = false;
 		uint16_t seqnum = 0;
 
 		float flightDist = 0.f;
-		float flightTime = 0.f;
 		uint32_t kills = 0;
 		uint32_t deaths = 0;
 		uint32_t wins = 0;
@@ -80,7 +80,7 @@ public:
 	const PlayerState& getPlayerState(int i) const { return playerState[i]; }
 	void setInGame(Player *player, bool inGame);
 	void gameStop(Player *player);
-	void sendRankUpdates();
+	void sendRankUpdate(Player *player, uint32_t flightTime, Packet& packet);
 	void sendPlayerList(Packet& packet);
 	void sendRoomAttrs(Packet& packet);
 	void sendRngSeed(Packet& packet);

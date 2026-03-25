@@ -244,6 +244,10 @@ void LobbyServer::send(Packet& packet, const asio::ip::udp::endpoint& endpoint)
 	socket.send_to(asio::buffer(packet.data, pktsize), endpoint, 0, ec2);
 }
 
+static inline void strtolower(std::string& str) {
+	std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c){ return std::tolower(c); });
+}
+
 void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 {
 	if (player == nullptr)
@@ -331,6 +335,8 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					replyPacket.writeData(lobby->getPlayerCount());
 					for (Player *pl : lobby->getPlayers())
 					{
+						if (pl == player)
+							continue;
 						replyPacket.writeData(pl->getName().c_str(), 0x10);
 						replyPacket.writeData(pl->getId());
 						const auto& extra = player->getExtraData();
@@ -360,6 +366,8 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 						replyPacket.writeData((uint32_t)players.size());
 						for (Player *pl : players)
 						{
+							if (pl == player)
+								continue;
 							replyPacket.writeData(pl->getName().c_str(), 0x10);
 							replyPacket.writeData(pl->getId());
 							const auto& extra = player->getExtraData();
@@ -792,7 +800,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			// }
 			std::string name(&data[0x10], &data[0x20]);
 			name.resize(read32(data, 0x20));
-			std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c){ return std::tolower(c); });
+			strtolower(name);
 			DEBUG_LOG(game, "[%s] REQ_SEARCH_USERS: %s", player->getName().c_str(), name.c_str());
 			replyPacket.init(Packet::REQ_SEARCH_USERS);
 			if (data[0] & 0x10)
@@ -805,8 +813,10 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			int count = 0;
 			for (const auto& [endpoint, pl] : players)
 			{
+				if (pl == player)
+					continue;
 				std::string pname = pl->getName().substr(0, name.size());
-				std::transform(pname.begin(), pname.end(), pname.begin(), [](unsigned char c){ return std::tolower(c); });
+				strtolower(pname);
 				if (pname == name)
 				{
 					replyPacket.writeData(pl->getName().c_str(), 0x10);

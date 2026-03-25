@@ -161,7 +161,6 @@ void PARoom::setStateData(int slot, const uint8_t *data)
 			prev = data[8 + i - 1];
 		if (prev != data[8 + i])
 		{
-			state.flightTime += 0.033333f;	// 33.3 ms flight time per frame
 			// min speed: 151 mph, normal speed: 226 mph
 			state.flightDist += 0.033333f * 151.f * (1 + (data[8 + i] >> 1) / 32.f) / 3600.f;
 		}
@@ -181,9 +180,9 @@ void PARoom::sendGameData(const std::error_code& ec)
 		return;
 
 	int slot = 0;
-	Packet packet;
 	while (slot < 6)
 	{
+		Packet packet;
 		packet.init(Packet::REQ_CHAT);
 		uint8_t *payload = &packet.data[packet.size];
 		packet.writeData(OUT_GAME_DATA);
@@ -208,10 +207,10 @@ void PARoom::sendGameData(const std::error_code& ec)
 		}
 		if (idx < 3)
 			payload[0x2b + idx] = 0xff;
+		for (unsigned i = 0; i < players.size(); i++)
+			if (playerState[i].inGame)
+				players[i]->send(packet);
 	}
-	for (unsigned i = 0; i < players.size(); i++)
-		if (playerState[i].inGame)
-			players[i]->send(packet);
 
 	// The game seems to send a state every 4 frames
 	if (timer.expiry().time_since_epoch() != 0ms)
@@ -247,42 +246,46 @@ void PARoom::resetState()
 
 		state.score = 0;
 		state.flightDist = 0.f;
-		state.flightTime = 0.f;
 		state.kills = 0;
 		state.deaths = 0;
 		state.wins = 0;
+		state.rankUpdated = false;
 	}
 }
 
-void PARoom::sendRankUpdates()
+void PARoom::sendRankUpdate(Player *player, uint32_t flightTime, Packet& packet)
 {
-	auto it = std::max_element(playerState.begin(), playerState.begin() + players.size(), [](const PlayerState& l, const PlayerState& r) {
-		return l.score < r.score;
-	});
-	uint8_t bestScore = it->score;
-	uint8_t slot = 0;
-	for (PlayerState& state : playerState)
+	if ((flags & 2) != 0)
 	{
-		if (state.score == bestScore)
-			state.wins++;
-		Packet packet;
+		// Ranking match
+		uint8_t slot = getPlayerIndex(player);
+		PlayerState& state = playerState[slot];
+		if (!state.rankUpdated)
+		{
+			auto it = std::max_element(playerState.begin(), playerState.begin() + players.size(), [](const PlayerState& l, const PlayerState& r) {
+				return l.score < r.score;
+			});
+			uint8_t bestScore = it->score;
+			if (state.score == bestScore)
+				state.wins++;
+			RankAcceptor::Instance->updateRank(player->getName(), state.kills, state.wins, 1,
+					flightTime / 30, std::round(state.flightDist), state.deaths, state.score);
+			state.rankUpdated = true;
+		}
 		packet.init(Packet::REQ_CHAT);
 		packet.flags |= Packet::FLAG_RUDP;
 		packet.writeData(OUT_UPDATE_SCORE);
 		packet.writeData(slot);
 		packet.writeData((uint16_t)0);
 		packet.writeData((uint32_t)std::round(state.flightDist));
-		packet.writeData((uint32_t)std::round(state.flightTime));
+		packet.writeData(flightTime / 30);
 		packet.writeData((uint32_t)state.score);
 		packet.writeData(state.kills);
 		packet.writeData(state.deaths);
 		packet.writeData(state.wins);
-		players[slot]->send(packet);
-		RankAcceptor::Instance->updateRank(players[slot]->getName(), state.kills, state.wins, 1,
-				std::round(state.flightTime), std::round(state.flightDist), state.deaths, state.score);
-		slot++;
-		if (slot >= players.size())
-			break;
+	}
+	else {
+		packet.init(Packet::REQ_NOP);
 	}
 }
 
@@ -368,9 +371,6 @@ void PropellerServer::sendPlayerAttrs(Player *player)
 	replyPacket.writeData(state.rank);
 	replyPacket.writeData(player->getId());
 }
-
-// FIXME debug: (WARN: repeat listing 'Flying'<-'Flying' 1001)	[pr c0f5ac6]
-//		(after entering lobby)
 
 static void dumpGameData(Player *player, int slot, const uint8_t *data)
 {
@@ -541,7 +541,6 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		replyPacket.init(Packet::REQ_NOP);
 		replyPacket.ack(read32(data, 8));
 		room->gameStop(player);
-		room->sendRankUpdates();
 		break;
 
 	case IN_GAME_START:	// Start game
@@ -621,10 +620,11 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		//
 		// 0e 01 ef 0c 00 00 00 00 00 00 00 0a 02 00 00 00 ................
 		//    u8       int.BE..... int.BE.....
+		//                         flight time (frames)
 		// 0a 20 0c 0c 38 bf ef 0c 60 29 0c 0c             . ..8...`)..
-		replyPacket.init(Packet::REQ_NOP);
-		replyPacket.ack(read32(data, 8));
 		room->gameStop(player);
+		room->sendRankUpdate(player, read32(data, 0x18), replyPacket);
+		replyPacket.ack(read32(data, 8));
 		break;
 
 
