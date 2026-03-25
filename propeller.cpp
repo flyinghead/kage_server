@@ -23,6 +23,16 @@
 
 using namespace std::chrono_literals;
 
+PARoom::PARoom(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
+	: Room(lobby, id, name, attributes, owner, io_context), timer(io_context)
+{
+	rngSeed = (uint32_t)time(nullptr);
+	srand(rngSeed);
+	for (auto& state : playerState) {
+		state.plane = rand() & 7;
+	}
+}
+
 bool PARoom::removePlayer(Player *player)
 {
 	bool ownerLeft = player == owner;
@@ -239,6 +249,7 @@ void PARoom::gameStop(Player *player)
 
 void PARoom::resetState()
 {
+	rngSeed = (uint32_t)time(nullptr);
 	for (PlayerState& state : playerState)
 	{
 		state.data = {};
@@ -294,7 +305,7 @@ void PARoom::sendPlayerList(Packet& packet)
 	packet.init(Packet::REQ_CHAT);
 	packet.flags |= Packet::FLAG_RUDP;
 	packet.writeData(OUT_PLAYER_LIST);
-	packet.writeData(startState);	// TODO 1 or 2: if 1, sets DAT_0c5a5fa4 causing msg 6 to be sent when value 2 is received (start game?)
+	packet.writeData(startState);
 
 	uint8_t pdata[14] {};
 	// Human planes
@@ -310,8 +321,10 @@ void PARoom::sendPlayerList(Packet& packet)
 	// AI planes
 	for (unsigned i = players.size(); i < 6; i++)
 	{
+		const PARoom::PlayerState& state = playerState[i];
 		unsigned shift = (i & 1) * 4;
-		pdata[i / 2 + 0] |= 0 << shift;			// TODO? plane
+		// AI plane types are randomly chosen, or the type used by the last player in this slot if any
+		pdata[i / 2 + 0] |= state.plane << shift;
 		// controlling slot for AI planes: assign to each player in a round-robin fashion
 		pdata[i / 2 + 6] |= ((i - players.size()) % players.size()) << shift;
 	}
@@ -463,7 +476,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 	{
 	case IN_SET_PLAYER_ATTRS: // Select plane, change player flags
 		// FIXME some players are setting all to 0 at game start (payload 0x44 bytes)
-		DEBUG_LOG(game, "[%s] SET_PLAYER_ATTRS %02x %02x %02x %02x %02x %02x %02x", player->getName().c_str(),
+		DEBUG_LOG(game, "[%s] SET PLAYER ATTRS %02x %02x %02x %02x %02x %02x %02x", player->getName().c_str(),
 				data[0x11], data[0x12], data[0x13], data[0x14], data[0x15], data[0x16], data[0x17]);
 		// [0] 00 00 08 01 10 00 00
 		// d[1] plane type (0)
@@ -500,7 +513,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		{
 			// 02 01 01 00
 			// 02 00 02 00
-			DEBUG_LOG(game, "[%s] gamedata[2] %02x %02x %02x", player->getName().c_str(), data[0x11], data[0x12], data[0x13]);
+			DEBUG_LOG(game, "[%s] GAME STARTING %02x %02x", player->getName().c_str(), data[0x11], data[0x12]);
 
 			if (data[0x12] == 1)
 				room->resetState();
@@ -526,7 +539,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			// d[4] & 0x40: red option
 			// d[4] & 0x02: ranking
 			// d[7] == AC
-			DEBUG_LOG(game, "[%s] gamedata[3] %02x %02x %02x %02x %02x %02x %02x", player->getName().c_str(),
+			DEBUG_LOG(game, "[%s] SET ROOM ATTRS %02x %02x %02x %02x %02x %02x %02x", player->getName().c_str(),
 					data[0x11], data[0x12], data[0x13], data[0x14], data[0x15], data[0x16], data[0x17]);
 			room->updateSettings(data[0x11] & 0xf, data[0x11] >> 4, data[0x14], data[0x12], data[0x13]);
 			room->sendRoomAttrs(replyPacket);
@@ -544,15 +557,16 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		break;
 
 	case IN_GAME_START:	// Start game
-		DEBUG_LOG(game, "[%s] gamedata[6] GAME START", player->getName().c_str());
+		DEBUG_LOG(game, "[%s] GAME START", player->getName().c_str());
 		room->setInGame(player, true);
+		// FIXME also sent by the new room master (?) after a player disconnects in game
 		// send rng seed
 		room->sendRngSeed(replyPacket);
 		replyPacket.ack(read32(data, 8));
 		break;
 
 	case IN_GAME_STOP: // End game
-		DEBUG_LOG(game, "[%s] gamedata[7] GAME STOP", player->getName().c_str());
+		DEBUG_LOG(game, "[%s] GAME STOP", player->getName().c_str());
 		// flags a000
 		// 07 bf ef 0c
 		room->setInGame(player, false);
@@ -609,7 +623,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		break;
 
 	case IN_GAME_ENDED: // Game ended, sent by all players
-		DEBUG_LOG(game, "[%s] gamedata[E] GAME ENDED", player->getName().c_str());
+		DEBUG_LOG(game, "[%s] GAME ENDED", player->getName().c_str());
 		// flags a000
 		// 0e 00 ef 0c 00 00 00 0c 00 00 23 28 02 00 00 00 ..........#(....
 		// 0a 20 0c 0c 38 bf ef 0c 60 29 0c 0c             . ..8...`)..

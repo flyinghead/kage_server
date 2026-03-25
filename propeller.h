@@ -62,11 +62,7 @@ public:
 		uint32_t wins = 0;
 	};
 
-	PARoom(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
-		: Room(lobby, id, name, attributes, owner, io_context), timer(io_context)
-	{
-		rngSeed = (uint32_t)time(nullptr);
-	}
+	PARoom(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context);
 
 	bool removePlayer(Player *player) override;
 
