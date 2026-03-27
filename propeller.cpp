@@ -98,9 +98,9 @@ void PARoom::setStateData(int slot, const uint8_t *data)
 {
 	PlayerState& state = playerState[slot];
 	bool shotdown = false;
-	for (int i = 0; i < 4; i++)
+	for (int frame = 0; frame < 4; frame++)
 	{
-		if (data[0x18 + i] == 3)
+		if (data[0x18 + frame] == 3)
 		{
 			shotdown = true;
 			state.deaths++;
@@ -111,7 +111,7 @@ void PARoom::setStateData(int slot, const uint8_t *data)
 			else {
 				killed = std::string("C") + std::to_string(slot - players.size() + 1);
 			}
-			int killerSlot = data[0x10 + i];
+			int killerSlot = data[0x10 + frame];
 			if (killerSlot != 0xff)
 			{
 				std::string killer;
@@ -136,14 +136,14 @@ void PARoom::setStateData(int slot, const uint8_t *data)
 			&& slot < (int)players.size() // not interested in bot crashes
 			&& state.seqnum > 0)
 	{
-		for (int i = 0; i < 4; i++)
+		for (int frame = 0; frame < 4; frame++)
 		{
 			// D2 00 or 01 with E=0 means conflict
-			if (data[0xc + i] != 0)
+			if (data[0xc + frame] != 0)
 			{
 				// D2 != ff && E != 1
-				if ((data[0x10 + i] != 0xff)
-							&& data[0x18 + i] != 1)
+				if ((data[0x10 + frame] != 0xff)
+							&& data[0x18 + frame] != 1)
 				{
 					DEBUG_LOG(game, "%s crashed", players[slot]->getName().c_str());
 					if (state.score > 0)
@@ -152,7 +152,7 @@ void PARoom::setStateData(int slot, const uint8_t *data)
 				}
 				// D3 = [12-17] and F == 80 -> zeppelin crash
 				// D3 = [5-C]? and F == 80 -> crash into powerup
-				else if (data[0x14 + i] != 0xff && (data[0x1c + i] & 0x80))
+				else if (data[0x14 + frame] != 0xff && (data[0x1c + frame] & 0x80))
 				{
 					DEBUG_LOG(game, "%s crashed into a zeppelin/powerup", players[slot]->getName().c_str());
 					if (state.score > 0)
@@ -162,18 +162,16 @@ void PARoom::setStateData(int slot, const uint8_t *data)
 			}
 		}
 	}
-	for (int i = 0; i < 4; i++)
+	for (int frame = 0; frame < 4; frame++)
 	{
 		uint8_t prev;
-		if (i == 0)
+		if (frame == 0)
 			prev = state.data[0xb];
 		else
-			prev = data[8 + i - 1];
-		if (prev != data[8 + i])
-		{
+			prev = data[8 + frame - 1];
+		if (prev != data[8 + frame])
 			// min speed: 151 mph, normal speed: 226 mph
-			state.flightDist += 0.033333f * 151.f * (1 + (data[8 + i] >> 1) / 32.f) / 3600.f;
-		}
+			state.flightDist += 0.033333f * 151.f * (1 + (data[8 + frame] >> 1) / 32.f) / 3600.f;
 	}
 
 	memcpy(state.data.data(), data, state.data.size());
@@ -184,10 +182,66 @@ void PARoom::setStateData(int slot, const uint8_t *data)
 	}
 }
 
+void PARoom::setAudio(uint8_t slot, const uint8_t *data)
+{
+	if (slot != talkingSlot)
+		return;
+	if (data == nullptr) {
+		talkingSlot = 0xff;
+		return;
+	}
+	PlayerState& state = playerState[slot];
+	memcpy(state.audio.data(), data, state.audio.size());
+	/*
+	Packet packet;
+	packet.init(Packet::REQ_CHAT);
+	packet.writeData(OUT_AUDIO);
+	packet.writeData(slot);
+	packet.writeData(audioSeq++);
+	packet.writeData((uint8_t)0);		// ?
+	packet.writeData((uint8_t)0x14);	// data sizes
+	packet.writeData((uint8_t)0x14);
+	packet.writeData((uint8_t)0);
+	packet.writeData((uint8_t)0);		// padding
+	packet.writeData(data, 0x28);
+	Player::sendToAll(packet, players, players[slot]);
+	*/
+}
+
 void PARoom::sendGameData(const std::error_code& ec)
 {
 	if (ec)
 		return;
+
+	if (talkingSlot != 0xff && Clock::now() - audioStart >= 5s) {
+		talkingSlot = 0xff;
+	}
+	else
+	{
+		for (int frame = 0; frame < 4 && talkingSlot == 0xff; frame++)
+		{
+			for (int slot = 0; slot < 6; slot++)
+			{
+				if (playerState[slot].data[0x1c + frame] & 0x10)
+				{
+					talkingSlot = slot;
+					audioSeq = 1;
+					audioStart = Clock::now();
+					DEBUG_LOG(game, "[%d] %s talking\n", slot, players[slot]->getName().c_str());
+					break;
+				}
+			}
+		}
+	}
+	bool missingData = false;
+	for (const PlayerState& state : playerState)
+	{
+		if (state.seqnum == 0) {
+			// no data received yet
+			missingData = true;
+			break;
+		}
+	}
 
 	int slot = 0;
 	while (slot < 6)
@@ -195,28 +249,57 @@ void PARoom::sendGameData(const std::error_code& ec)
 		Packet packet;
 		packet.init(Packet::REQ_CHAT);
 		uint8_t *payload = &packet.data[packet.size];
-		packet.writeData(OUT_GAME_DATA);
-		packet.writeData((uint8_t)0);	// ff doesn't seem to change anything
-		packet.writeData((uint8_t)0);
-		packet.size += 0xec;
-		int idx = 0;
-		for (; idx < 3 && slot < 6; idx++, slot++)
+		if (talkingSlot != 0xff || slot >= 3 || missingData)
 		{
-			PlayerState& state = playerState[slot];
-			if (state.seqnum == 0) {
-				// no data received yet so skip it
-				idx--;
-				continue;
+			// Use packet 1C: 1 to 3 planes with audio data
+			packet.writeData(OUT_GAME_DATA_AUDIO);
+			packet.writeData(talkingSlot);	// slot of the player currently talking, or FF
+			packet.writeData((uint8_t)0);	// flag. adds 6 to previous slot if != 0 (?)
+			packet.size += 0x2b;
+			payload[0x2b] = 0xff;
+			payload[0x2c] = 0xff;
+			payload[0x2d] = 0xff;
+
+			int idx = 0;
+			for (; idx < 3 && slot < 6; slot++)
+			{
+				PlayerState& state = playerState[slot];
+				if (state.seqnum == 0)
+					// no data received yet so skip it
+					continue;
+				if (idx == 0)
+					packet.size += 0xa;
+				payload[0x2b + idx] = slot;
+				// score
+				payload[0x2e + idx] = state.score;
+				// state seqnum
+				*(uint16_t *)&payload[0x32 + idx * 2] = ntohs(state.seqnum);
+				packet.size += 0x3c;
+				memcpy(&payload[0x38 + idx * 0x3c], state.data.data(), state.data.size());
+				if (talkingSlot == slot) {
+					memcpy(&payload[3], state.audio.data(), state.audio.size());
+					memset(state.audio.data(), 0, state.audio.size());
+				}
+				idx++;
 			}
-			payload[0x2b + idx] = slot;
-			// score
-			payload[0x2e + idx] = state.score;
-			// state seqnum
-			*(uint16_t *)&payload[0x32 + idx * 2] = ntohs(state.seqnum);
-			memcpy(&payload[0x38 + idx * 0x3c], state.data.data(), state.data.size());
 		}
-		if (idx < 3)
-			payload[0x2b + idx] = 0xff;
+		else
+		{
+			// Use packet 1D: 4 planes without audio
+			packet.writeData(OUT_GAME_DATA);
+			packet.writeData(talkingSlot);	// slot of the player currently talking, or FF
+			packet.size += 0x102;
+			for (int idx = 0; idx < 4 && slot < 6; slot++, idx++)
+			{
+				const PlayerState& state = playerState[slot];
+				payload[2 + idx] = slot;
+				// score
+				payload[6 + idx] = state.score;
+				// state seqnum
+				*(uint16_t *)&payload[0xa + idx * 2] = ntohs(state.seqnum);
+				memcpy(&payload[0x14 + idx * 0x3c], state.data.data(), state.data.size());
+			}
+		}
 		for (unsigned i = 0; i < players.size(); i++)
 			if (playerState[i].inGame)
 				players[i]->send(packet);
@@ -250,6 +333,8 @@ void PARoom::gameStop(Player *player)
 void PARoom::resetState()
 {
 	rngSeed = (uint32_t)time(nullptr);
+	talkingSlot = 0xff;
+	audioSeq = 1;
 	for (PlayerState& state : playerState)
 	{
 		state.data = {};
@@ -315,7 +400,7 @@ void PARoom::sendPlayerList(Packet& packet)
 		unsigned shift = (i & 1) * 4;
 		pdata[i / 2 + 0] |= state.plane << shift;
 		pdata[i / 2 + 3] |= state.flags << shift;
-		pdata[i / 2 + 6] |= i << shift; 	// slot
+		pdata[i / 2 + 6] |= controllingSlot(i) << shift; 	// slot
 		pdata[i / 2 + 9] |= state.rank << shift;
 	}
 	// AI planes
@@ -326,7 +411,7 @@ void PARoom::sendPlayerList(Packet& packet)
 		// AI plane types are randomly chosen, or the type used by the last player in this slot if any
 		pdata[i / 2 + 0] |= state.plane << shift;
 		// controlling slot for AI planes: assign to each player in a round-robin fashion
-		pdata[i / 2 + 6] |= ((i - players.size()) % players.size()) << shift;
+		pdata[i / 2 + 6] |= controllingSlot(i) << shift;
 	}
 	packet.writeData(pdata, sizeof(pdata));
 	for (unsigned i = 0; i < 6; i++)
@@ -549,6 +634,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		}
 
 	case IN_GAME_OVER: // End of game (sent by owner for ranking games)
+		// TODO looks more like a game abort thing. Sent combined with LOBBY LOGOUT in case of error
 		DEBUG_LOG(game, "[%s] GAME OVER", player->getName().c_str());
 		// flags a000
 		replyPacket.init(Packet::REQ_NOP);
@@ -592,15 +678,41 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		//dumpData(data + 0x10, len - 0x10);
 		//dumpGameData(player, data[0x11], data + 0x40);
 		// 0b 00 00 00 00 69 00 00 00 00 00 00 00 00 00 00 .....i..........
-		//               seq
+		//               seq [audio #1
 		// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
+		//                     ...audio] [audio #2
 		// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
+		//                                 ...audio]
 		// 00 00 00 00 00 00 00 00 34 32 34 32 1e 1e 1e 1e ........4242....
 		// same as C[8]
 		// ff ff ff ff ff ff ff ff 00 00 00 00 00 00 01 01 ................
 		// 00 00 00 00 00 00 00 00 ff 00 5e f2 62 03 ce ff ..........^.b...
 		// 78 fe 9d 1a 46 01 00 00 00 00 00 00             x...F.......
+		// With audio
+		//0010   0b 00 00 00 00 53 a1 0e f4 cc 0a 7b 54 e5 af 06   .....S.....{T...
+		//                     seq [audio #1
+		//0020   72 41 0d 0c 11 a5 d6 60 a4 fe a9 d2 f5 c0 47 a1   rA.....`......G.
+		//                                   ] [audio #2
+		//0030   42 d5 3a 11 aa 8e 0e 89 fb 18 1f 23 80 df 00 00   B.:........#....
+		//                                               ]
+		//0040   00 00 00 00 00 00 00 00 34 32 34 32 1e 1e 1e 1e   ........4242....
+		//0050   ff ff ff ff ff ff ff ff 00 00 00 00 40 40 40 40   ............@@@@
+		//0060   00 00 00 00 00 00 00 00 ff 00 00 00 01 22 00 00   ............."..
+		//0070   98 f1 58 1b 9a 0e 00 00 00 00 00 00 20 54 00 11   ..X......... T..
+		//0080   00 00 10 02 00 00 01 1b 00 00 00 00 0a 02 00 00   ................
+		//0090   00 53 00 00 0c 0d 0f 10 b8 b8 ba bc 30 31 32 33   .S..........0123
+		//00a0   1e 1e 1e 1e ff ff ff ff ff ff ff ff 00 00 00 00   ................
+		//00b0   00 00 00 00 00 00 00 00 00 00 00 00 05 00 21 fd   ..............!.
+		//00c0   b1 f5 74 f5 31 02 ca 19 86 fd 00 00 00 00 00 00   ..t.1...........
+		//00d0   20 54 00 11 00 00 10 02 00 00 01 1c 00 00 00 00    T..............
+		//00e0   0a 04 00 00 00 53 00 00 f3 f2 f1 f0 a6 a6 a7 a8   .....S..........
+		//00f0   44 45 44 45 1e 1e 1e 1e ff ff ff ff ff ff ff ff   DEDE............
+		//0100   00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................
+		//0110   01 00 2c 16 6b 9f 74 dc 4d 04 f0 1a 53 fa 00 00   ..,.k.t.M...S...
+		//0120   00 00 00 00 ba 47 66 10                           .....Gf.
+
 		room->setStateData(data[0x11], data + 0x40);
+		room->setAudio(data[0x11], data + 0x16);
 		break;
 
 	case IN_GAME_HDATA: // in game data for human planes
@@ -612,7 +724,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		// 32 32 32 32 1e 1e 1e 1e ff ff ff ff ff ff ff ff 2222............
 		//             constants   constants
 		// 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ................
-		// constants   constants
+		// constants   talk: & 10
 		// ff 00 00 00 00 80 00 00 00 00 58 1b 21 d9 00 00 ..........X.!...
 		// by    short short short short short short
 		// 8ae   pl[c] pl[d] pl[e] p[51] p[52] p[53]        c,d,e: angles, 51,52,53: position?
@@ -620,6 +732,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		// long (flag?)
 		// matches handle 1C/1D
 		room->setStateData(data[0x11], data + 0x18);
+		room->setAudio(data[0x11], nullptr);
 		break;
 
 	case IN_GAME_ENDED: // Game ended, sent by all players
@@ -660,7 +773,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 //						new game settings?
 //						d[6] & 0x3f: more flags? user slot used?
 //		13	sz >= 4		? ? ? (ignored) int	(srand seed)
-//		14	sz 0x68?	byte (player index) byte byte  byte*3 AUDIO?
+//		14	sz 0x68?	byte (slot) byte (seq?) byte  byte*3 (sizes, max 0x18) (pad) AUDIO
 //                      can also be sent w/o rudp
 //		15	size 4		bool (sets a flag, doesn't seem to be used) should be sent when 9 is received (not used)
 //		16	size 4		byte (user idx) byte (sets DAT_0c5a5ee8, not read? reset to 0 on recv 1a) sent when player joins?
@@ -671,7 +784,9 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 //
 // !reliable:
 //		1c	up to CC?	p[1,2]		kept, p[1] tested against FF
-//									p[2] flag (some index += 6 if 1)
+//									p[2] flag (some index += 6 if 1, audio related?)
+//						p[3-16]		audio data 1
+//						p[17-2a]	audio data 2
 //                                  loop 0-2
 //						p[2b-2d]	array of slots, if ff => loop stops
 //						p[2e-30]	array of scores
@@ -680,7 +795,8 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 //						(p[54,+3*3c])
 //		1d	up to E4	p[1] 		kept, tested against ff (same as 1c)
 //						p[2-5]		array of slots
-//						p[a-14[		array of 4 shorts (BE)
+//						p[6-9]		array of scores
+//						p[a-11]		array of 4 shorts (BE)
 //						p[14,+4*3c?]	plane pos data (same as C offset 30)
 //
 

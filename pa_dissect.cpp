@@ -33,6 +33,7 @@ const char *commandName(int cmd)
 	case Packet::REQ_QRY_LOBBIES: return "QRY LOBBIES";
 	case Packet::REQ_QRY_ROOMS: return "QRY ROOMS";
 	case Packet::REQ_QRY_USERS: return "QRY USERS";
+	case Packet::REQ_LOBBY_LOGOUT: return "LOBBY LOGOUT";
 	default:
 		break;
 	}

@@ -36,9 +36,10 @@ enum PropMessages : uint8_t
 	OUT_PLAYER_LIST = 0x10,
 	OUT_SET_ROOM_ATTRS = 0x12,
 	OUT_SET_RNG_SEED = 0x13,
+	OUT_AUDIO = 0x14,
 	OUT_ACK_PLAYER_ATTRS = 0x18,
-	OUT_GAME_DATA = 0x1c,
-	OUT_GAME_DATA2 = 0x1d,
+	OUT_GAME_DATA_AUDIO = 0x1c,
+	OUT_GAME_DATA = 0x1d,
 	OUT_UPDATE_SCORE = 0x1e,
 };
 
@@ -52,6 +53,7 @@ public:
 		uint8_t rank = 0;
 		uint8_t score = 0;
 		std::array<uint8_t, 0x3c> data {};
+		std::array<uint8_t, 0x28> audio {};
 		bool rankUpdated = false;
 		bool inGame = false;
 		uint16_t seqnum = 0;
@@ -72,6 +74,7 @@ public:
 	void setRank(Player *player, uint8_t rank);
 	void setStartState(uint8_t state) { startState = state; }
 	void setStateData(int slot, const uint8_t *data);
+	void setAudio(uint8_t slot, const uint8_t *data);
 
 	const PlayerState& getPlayerState(int i) const { return playerState[i]; }
 	void setInGame(Player *player, bool inGame);
@@ -84,6 +87,9 @@ public:
 
 private:
 	void sendGameData(const std::error_code& ec);
+	uint8_t controllingSlot(uint8_t slot) const {
+		return (slot + players.size()) % players.size();
+	}
 
 	int stage = 0;
 	int maxPoints = 0;
@@ -96,6 +102,9 @@ private:
 	std::array<PlayerState, 6> playerState;
 	asio::steady_timer timer;
 	bool timerStarted = false;
+	uint8_t talkingSlot = 0xff;
+	uint8_t audioSeq = 1;
+	time_point audioStart;
 };
 
 class PropellerServer : public LobbyServer
