@@ -100,7 +100,8 @@ void Player::resendTimer(const std::error_code& ec)
 		return;
 	if (sendCount >= 4)
 	{
-		WARN_LOG(server.game, "Sending packet %x to %s failed after %d attempts", lastRelPacket.data[3], name.c_str(), sendCount);
+		WARN_LOG(server.game, "Sending packet %x to %s failed after %d attempts (ping %d)",
+				lastRelPacket.data[3], name.c_str(), sendCount, (int)ping);
 		ackedRelSeq++;
 		if (!relQueue.empty()) {
 			sendRel(relQueue.front().second, relQueue.front().first);
@@ -297,7 +298,8 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			{
 				INFO_LOG(game, "[%s] RUdp packet %x already handled. Ignoring", player->getName().c_str(), data[3]);
 				replyPacket.init(Packet::REQ_NOP);
-				player->ackPacket(replyPacket, data);
+				uint32_t seq = read32(data, 8);
+				replyPacket.ack(seq);
 				rudpIgnore = true;
 				return;
 			}

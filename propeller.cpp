@@ -186,10 +186,11 @@ void PARoom::setAudio(uint8_t slot, const uint8_t *data)
 {
 	if (slot != talkingSlot)
 		return;
-	if (data == nullptr && Clock::now() - audioStart >= 500ms)
+	if (data == nullptr)
 	{
-		// The talking player has 500 ms to start sending audio
-		talkingSlot = 0xff;
+		if (Clock::now() - audioStart >= 500ms)
+			// The talking player has 500 ms to start sending audio
+			talkingSlot = 0xff;
 		return;
 	}
 	PlayerState& state = playerState[slot];
