@@ -98,7 +98,7 @@ void Player::resendTimer(const std::error_code& ec)
 {
 	if (ec)
 		return;
-	if (sendCount >= 5)
+	if (sendCount >= 4)
 	{
 		WARN_LOG(server.game, "Sending packet %x to %s failed after %d attempts", lastRelPacket.data[3], name.c_str(), sendCount);
 		ackedRelSeq++;
@@ -110,8 +110,10 @@ void Player::resendTimer(const std::error_code& ec)
 	}
 	sendCount++;
 	server.send(lastRelPacket, getEndpoint());
-	timer.expires_after(500ms);
+	lastRUdpSend = Clock::now();
+	timer.expires_after(std::chrono::milliseconds((int)ping) + sendCount * 200ms);
 	// game (bba) apparently retries after 100 ms, 200 ms, 400 ms, 800 ms then timeout
+	// propeller arena: 200 ms, 400 ms, 600 ms, 800 ms, timeout
 	timer.async_wait(std::bind(&Player::resendTimer, this, asio::placeholders::error));
 }
 
@@ -123,6 +125,7 @@ void Player::ackRUdp(uint32_t seq)
 	ackedRelSeq = seq;
 	std::error_code ec;
 	timer.cancel(ec);
+	ping = ping * 0.7f + (Clock::now() - lastRUdpSend) / 1.0ms * 0.3f;
 	if (!relQueue.empty()) {
 		sendRel(relQueue.front().second, relQueue.front().first);
 		relQueue.pop_front();
@@ -133,6 +136,28 @@ void Player::ackRUdp(uint32_t seq)
 		if (room != nullptr)
 			room->rudpAcked(this);
 	}
+}
+
+void Player::ackPacket(Packet& outPacket, const uint8_t *inPacket)
+{
+	if ((read16(inPacket, 0) & Packet::FLAG_RUDP) == 0)
+		// Not an RUdp packet
+		return;
+	uint32_t seq = read32(inPacket, 8);
+	if (seq != 0 || ackedClientSeq < (int)seq)
+	{
+		outPacket.ack(seq);
+		if ((int)seq > ackedClientSeq)
+			ackedClientSeq = seq;
+	}
+}
+
+bool Player::packetAcked(const uint8_t *packet)
+{
+	if ((read16(packet, 0) & Packet::FLAG_RUDP) == 0)
+		return false;
+	uint32_t seq = read32(packet, 8);
+	return (int)seq <= ackedClientSeq;
 }
 
 void Server::read()
@@ -260,7 +285,25 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		player = it->second;
 		player->setAlive();
 	}
-	//printf("Lobby: %s packet: flags/size %02x %02x command %02x %02x\n", player->getName().c_str(), data[0], data[1], data[2], data[3]);
+	// Check if we have handled this RUdp packet already
+	if (read16(data, 0) & Packet::FLAG_RUDP)
+	{
+		if (rudpIgnore)
+			return;
+		if (!rudpSeen)
+		{
+			rudpSeen = true;
+			if (player->packetAcked(data))
+			{
+				INFO_LOG(game, "[%s] RUdp packet %x already handled. Ignoring", player->getName().c_str(), data[3]);
+				replyPacket.init(Packet::REQ_NOP);
+				player->ackPacket(replyPacket, data);
+				rudpIgnore = true;
+				return;
+			}
+		}
+	}
+
 	// Game-specific packet handling
 	if (handlePacket(player, data, len))
 		return;
@@ -283,7 +326,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 	case Packet::REQ_LOBBY_LOGOUT:
 		{
 			replyPacket.respOK(Packet::REQ_LOBBY_LOGOUT);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			player->send(replyPacket);
 			removePlayer(player);
 			player = nullptr;
@@ -292,7 +335,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 	case Packet::REQ_QRY_LOBBIES:
 		{
 			replyPacket.init(Packet::REQ_QRY_LOBBIES);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			replyPacket.writeData(0u);
 			replyPacket.writeData(0u);
 			replyPacket.writeData((uint32_t)lobbies.size());
@@ -311,14 +354,14 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			DEBUG_LOG(game, "REQ_CHG_USER_STATUS %x", status);
 			player->setStatus(status);
 			replyPacket.respOK(Packet::REQ_CHG_USER_STATUS);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			replyPacket.writeData(0u);	// status?
 			break;
 		}
 	case Packet::REQ_QRY_USERS:
 		{
 			replyPacket.init(Packet::REQ_QRY_USERS);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			if (data[0] & 0x10)
 			{
 				// lobby
@@ -409,7 +452,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					replyPacket.writeData(lobby->getId());
 				}
 				replyPacket.flags |= Packet::FLAG_LOBBY;
-				replyPacket.ack(read32(data, 8));
+				player->ackPacket(replyPacket, data);
 			}
 			else
 			{
@@ -419,7 +462,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				if (room == nullptr)
 				{
 					replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
-					replyPacket.ack(read32(data, 8));
+					player->ackPacket(replyPacket, data);
 					replyPacket.writeData(8u);
 					WARN_LOG(game, "%s join room failed: unknown room id %x (lobby %p)", player->getName().c_str(), id, lobby);
 					break;
@@ -428,7 +471,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				{
 					// Room locked or in game
 					replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
-					replyPacket.ack(read32(data, 8));
+					player->ackPacket(replyPacket, data);
 					// 9 is "room locked"
 					replyPacket.writeData(9u);
 					INFO_LOG(game, "%s join room failed: room locked", player->getName().c_str());
@@ -438,7 +481,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				if (password != room->getPassword())
 				{
 					replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
-					replyPacket.ack(read32(data, 8));
+					player->ackPacket(replyPacket, data);
 					// 0xF is incorrect password
 					replyPacket.writeData(0xfu);
 					INFO_LOG(game, "%s join room failed: incorrect password", player->getName().c_str());
@@ -448,7 +491,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				if (room->getPlayerCount() >= room->getMaxPlayers())
 				{
 					replyPacket.respFailed(Packet::REQ_JOIN_LOBBY_ROOM);
-					replyPacket.ack(read32(data, 8));
+					player->ackPacket(replyPacket, data);
 					replyPacket.writeData(8u);
 					WARN_LOG(game, "%s join room failed: room %s full", player->getName().c_str(), room->getName().c_str());
 					break;
@@ -465,7 +508,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 
 				replyPacket.respOK(Packet::REQ_JOIN_LOBBY_ROOM);
 				replyPacket.writeData(room->getId());
-				replyPacket.ack(read32(data, 8));
+				player->ackPacket(replyPacket, data);
 
 				// Push room status to new player
 				replyPacket.init(Packet::REQ_CHG_ROOM_ATTR);
@@ -498,13 +541,13 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 						player->getLobby()->removeRoom(room);
 				}
 			}
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			break;
 		}
 	case Packet::REQ_QRY_ROOMS:
 		{
 			replyPacket.init(Packet::REQ_QRY_ROOMS);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			replyPacket.flags |= Packet::FLAG_LOBBY;
 			int lobbyId = read32(data, 0x10);
 			Lobby *lobby = getLobby(lobbyId);
@@ -544,7 +587,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			uint32_t attributes = read32(data, 0x38);
 			if (player->getLobby() == nullptr) {
 				replyPacket.respFailed(Packet::REQ_CREATE_ROOM);
-				replyPacket.ack(read32(data, 8));
+				player->ackPacket(replyPacket, data);
 			}
 			else
 			{
@@ -565,7 +608,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 
 				replyPacket.respOK(Packet::REQ_CREATE_ROOM);
 				replyPacket.writeData(room->getId());
-				replyPacket.ack(read32(data, 8));
+				player->ackPacket(replyPacket, data);
 
 				replyPacket.init(Packet::REQ_CHG_ROOM_ATTR);
 				replyPacket.writeData(room->getId());
@@ -603,7 +646,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				{
 					ERROR_LOG(game, "CHG_ROOM_ATTR kind not implemented: %.4s", &data[0x10]);
 					replyPacket.respFailed(Packet::REQ_CHG_ROOM_ATTR);
-					replyPacket.ack(read32(data, 8));
+					player->ackPacket(replyPacket, data);
 					break;
 				}
 				// Notify other users
@@ -623,7 +666,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				else
 					replyPacket.writeData(&data[0x14], 4);
 			}
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			break;
 		}
 
@@ -649,7 +692,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 						// don't ack continued chat pkt
 						break;
 					replyPacket.respOK(Packet::REQ_CHAT);
-					replyPacket.ack(seq);
+					player->ackPacket(replyPacket, data);
 					replyPacket.flags |= flags & Packet::FLAG_LOBBY;
 				}
 				else {
@@ -670,7 +713,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			// dest count  dest[0]...  message
 			uint16_t flags = read16(data, 0);
 			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 
 			const std::vector<Player *> *players = nullptr;
 			if (flags & Packet::FLAG_LOBBY)
@@ -725,7 +768,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		//dumpData(data + 0x10, len - 0x10);
 		player->setExtraData(data + 0x10, len - 0x10);
 		replyPacket.respOK(Packet::REQ_CHG_USER_PROP);
-		replyPacket.ack(read32(data, 8));
+		player->ackPacket(replyPacket, data);
 		replyPacket.data[2] = data[2]; // propeller arena needs this (only checked for REQ_CHG_USER_PROP)
 		break;
 
@@ -763,20 +806,20 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					break;
 				}
 			}
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			break;
 		}
 
 	case Packet::REQ_AUDIO_START:
 		DEBUG_LOG(game, "[%s] REQ_AUDIO_START", player->getName().c_str());
 		replyPacket.respOK(Packet::REQ_AUDIO_START);
-		replyPacket.ack(read32(data, 8));
+		player->ackPacket(replyPacket, data);
 		break;
 
 	case Packet::REQ_AUDIO_STOP:
 		DEBUG_LOG(game, "[%s] REQ_AUDIO_STOP", player->getName().c_str());
 		replyPacket.respOK(Packet::REQ_AUDIO_STOP);
-		replyPacket.ack(read32(data, 8));
+		player->ackPacket(replyPacket, data);
 		break;
 
 	case Packet::REQ_SEARCH_USERS:
@@ -805,7 +848,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			replyPacket.init(Packet::REQ_SEARCH_USERS);
 			if (data[0] & 0x10)
 				replyPacket.flags |= Packet::FLAG_LOBBY;
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			replyPacket.writeData(0u);
 			replyPacket.writeData(0u);
 			uint16_t countOffset = replyPacket.size;
@@ -842,7 +885,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			uint16_t flags = read16(data, 0);
 			if (flags & Packet::FLAG_RUDP) {
 				replyPacket.init(Packet::REQ_NOP);
-				replyPacket.ack(read32(data, 8));
+				player->ackPacket(replyPacket, data);
 			}
 			break;
 		}
@@ -869,6 +912,8 @@ void LobbyServer::handlePacketDone()
 	}
 	replyPacket.reset();
 	relayPacket.reset();
+	rudpSeen = false;
+	rudpIgnore = false;
 }
 
 void LobbyServer::dump(const uint8_t* data, size_t len)
@@ -925,7 +970,7 @@ void Room::addPlayer(Player *player)
 		return;
 	players.push_back(player);
 	player->setRoom(this);
-	INFO_LOG(game, "%s joined room %s", player->getName().c_str(), name.c_str());
+	INFO_LOG(game, "%s joined room %s (ping %d)", player->getName().c_str(), name.c_str(), (int)player->getPing());
 }
 
 bool Room::removePlayer(Player *player)

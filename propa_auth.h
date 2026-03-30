@@ -27,6 +27,7 @@ extern "C" {
 #include <array>
 #include <string>
 #include <vector>
+using namespace std::chrono_literals;
 
 constexpr Game game = Game::PropellerA;
 
@@ -44,7 +45,9 @@ public:
 		return socket;
 	}
 
-	void receive() {
+	void receive()
+	{
+		startTimer();
 		// TODO packet matcher, use DynamicBuffer?
 		asio::async_read(socket, asio::buffer(recvBuffer), asio::transfer_at_least(0x68),
 				std::bind(&AuthConnection::onReceive, shared_from_this(), asio::placeholders::error, asio::placeholders::bytes_transferred));
@@ -52,7 +55,7 @@ public:
 
 private:
 	AuthConnection(asio::io_context& io_context)
-		: socket(io_context) {}
+		: socket(io_context), timer(io_context) {}
 
 	void send()
 	{
@@ -199,12 +202,23 @@ private:
 		}
 	}
 
+	void startTimer()
+	{
+		timer.expires_after(30s);
+		timer.async_wait([this](const std::error_code& ec) {
+			if (ec)
+				return;
+			socket.shutdown(asio::socket_base::shutdown_both);
+		});
+	}
+
 	static constexpr size_t KEY_SIZE = 56;
 	asio::ip::tcp::socket socket;
 	std::array<uint8_t, 0x90> recvBuffer;
 	std::array<uint8_t, 0x38> sendBuffer;
 	std::array<uint8_t, KEY_SIZE> key;
 	BLOWFISH_CTX blowfishCtx;
+	asio::steady_timer timer;
 
 	friend super;
 };

@@ -49,7 +49,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 			tag.full = read16(data, 0x10);
 			INFO_LOG(game, "relUDP msgF: tag=%x (%04x)", tag.command, tag.full);
 			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			return true;
 		}
 	}
@@ -72,7 +72,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 		{
 			INFO_LOG(game, "tag: START OK");
 			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 
 			Room *room = player->getRoom();
 			if (room != nullptr && room->getPlayerCount() >= 2)
@@ -96,7 +96,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 		{
 			INFO_LOG(game, "tag: SYS from %s", player->getName().c_str());
 			replyPacket.init(Packet::RSP_TAG_CMD);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			replyPacket.flags |= Packet::FLAG_RUDP;
 			replyPacket.writeData(0u);	// list: count [int ...]
 			TagCmd tag;
@@ -119,7 +119,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 		{
 			INFO_LOG(game, "tag: READY from %s", player->getName().c_str());
 			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 
 			OTRoom *room = (OTRoom *)player->getRoom();
 			if (room != nullptr && room->setReady(player))
@@ -147,9 +147,8 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 		{
 			//DEBUG_LOG(game, "tag: SYNC from %s", player->getName().c_str());
 			if (data[0] & 0x80) {
-				// propA sends rel SYNC after creating room
 				replyPacket.init(Packet::REQ_NOP);
-				replyPacket.ack(read32(data, 8));
+				player->ackPacket(replyPacket, data);
 			}
 			OTRoom *room = (OTRoom *)player->getRoom();
 			if (room != nullptr)
@@ -161,7 +160,7 @@ bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t 
 		{
 			INFO_LOG(game, "tag: RESULT from %s", player->getName().c_str());
 			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 
 			OTRoom *room = (OTRoom *)player->getRoom();
 			if (room != nullptr && room->setResult(player, &data[0x12]))

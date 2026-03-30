@@ -34,6 +34,7 @@ public:
 
 	void receive()
 	{
+		startTimer();
 		socket.async_read_some(asio::buffer(recvBuffer),
 				std::bind(&RankConnection::onReceive, shared_from_this(), asio::placeholders::error, asio::placeholders::bytes_transferred));
 	}
@@ -47,7 +48,7 @@ public:
 
 private:
 	RankConnection(asio::io_context& io_context, Database& database)
-		: socket(io_context), database(database) {}
+		: socket(io_context), database(database), timer(io_context) {}
 
 	void send()
 	{
@@ -70,6 +71,7 @@ private:
 	}
 
 	void onReceive(const std::error_code& ec, size_t len);
+	void startTimer();
 
 	asio::ip::tcp::socket socket;
 	std::array<uint8_t, 1024> recvBuffer;
@@ -77,6 +79,7 @@ private:
 	size_t sendIdx = 0;
 	bool sending = false;
 	Database& database;
+	asio::steady_timer timer;
 
 	friend super;
 };

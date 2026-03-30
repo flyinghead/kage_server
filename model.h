@@ -99,11 +99,18 @@ public:
 	}
 	void ackRUdp(uint32_t seq);
 
+	void ackPacket(Packet& outPacket, const uint8_t *inPacket);
+	bool packetAcked(const uint8_t *packet);
+
 	void setAlive();
 	bool timedOut() const;
 
 	time_point getLastTimeSeen() const {
 		return lastTime;
+	}
+
+	float getPing() const {
+		return ping;
 	}
 
 private:
@@ -128,6 +135,9 @@ private:
 	std::deque<std::pair<uint32_t, Packet>> relQueue;
 	asio::steady_timer timer;
 	int sendCount = 0;
+	float ping = 100.f;
+	time_point lastRUdpSend;
+	int ackedClientSeq = -1;
 };
 
 class Room
@@ -349,5 +359,7 @@ protected:
 	Player *player = nullptr;
 	Packet replyPacket;
 	Packet relayPacket;
+	bool rudpSeen = false;
+	bool rudpIgnore = false;
 	static constexpr uint32_t LOBBY_ID_BASE = 0x3001;
 };

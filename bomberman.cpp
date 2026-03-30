@@ -253,7 +253,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		case 7:		// Set game rules
 			DEBUG_LOG(Game::Bomberman, "%s: set game rules", player->getName().c_str());
 			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 
 			if (room != nullptr)
 			{
@@ -276,7 +276,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		case 0xa:	// Start battle
 			DEBUG_LOG(Game::Bomberman, "%s: START BATTLE!", player->getName().c_str());
 			replyPacket.respOK(Packet::REQ_CHAT);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 
 			relayPacket.init(Packet::REQ_CHAT);
 			relayPacket.flags |= Packet::FLAG_RUDP;
@@ -290,13 +290,13 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 				replyPacket.init(Packet::REQ_NOP);
 				if (replyPacket.size == 0x10)
 					// FIXME how to figure out if we need to ack it or not?
-					replyPacket.ack(read32(data, 8));
+					player->ackPacket(replyPacket, data);
 /*
 				replyPacket.init(Packet::REQ_CHAT);
 				replyPacket.flags |= Packet::FLAG_RUDP;
 				if (replyPacket.size == 0x10)
 					// FIXME how to figure out if we need to ack it or not?
-					replyPacket.ack(read32(data, 8));
+					player->ackPacket(replyPacket, data);
 				replyPacket.writeData(cmd.full);
 				replyPacket.writeData(read16(data, 0x12));
 				replyPacket.writeData(room->getRules().data(), 9);
@@ -342,7 +342,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			{
 				DEBUG_LOG(Game::Bomberman, "%s: received new rules", player->getName().c_str());
 				replyPacket.init(Packet::REQ_NOP);
-				replyPacket.ack(read32(data, 8));
+				player->ackPacket(replyPacket, data);
 /*
 				// doesn't look right: message "the room master has set new rules"
 				Packet pkt;
@@ -357,7 +357,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 
 		case 0xf:	// ??? response to udpF 17
 			replyPacket.init(Packet::REQ_NOP);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 
 			relayPacket.init(Packet::REQ_CHAT);
 			relayPacket.flags |= Packet::FLAG_RUDP;
@@ -383,7 +383,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 
 	case 7:		// kick player
 		replyPacket.init(Packet::REQ_NOP);
-		replyPacket.ack(read32(data, 8));
+		player->ackPacket(replyPacket, data);
 		if (room != nullptr)
 		{
 			uint32_t playerPos = data[0x14];

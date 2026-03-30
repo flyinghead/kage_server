@@ -186,7 +186,9 @@ void PARoom::setAudio(uint8_t slot, const uint8_t *data)
 {
 	if (slot != talkingSlot)
 		return;
-	if (data == nullptr) {
+	if (data == nullptr && Clock::now() - audioStart >= 500ms)
+	{
+		// The talking player has 500 ms to start sending audio
 		talkingSlot = 0xff;
 		return;
 	}
@@ -576,7 +578,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 
 			replyPacket.init(Packet::REQ_CHAT);
 			replyPacket.flags |= Packet::FLAG_RUDP;
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			replyPacket.writeData(OUT_ACK_PLAYER_ATTRS);
 			replyPacket.writeData("", 3);
 			replyPacket.writeData(room->getOwner()->getId());
@@ -589,7 +591,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 	case IN_GET_ROOM_ATTRS:
 		DEBUG_LOG(game, "[%s] GET ROOM ATTRS", player->getName().c_str());
 		room->sendRoomAttrs(replyPacket);
-		replyPacket.ack(read32(data, 8));
+		player->ackPacket(replyPacket, data);
 		// FIXME owner gets network error after sending this *4 when game ends
 		// with 3+ players all guests fail after game with network error
 		break;
@@ -605,7 +607,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			room->setStartState(data[0x12]);
 
 			room->sendPlayerList(replyPacket);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			room->sendPlayerList(relayPacket);
 			break;
 		}
@@ -628,27 +630,27 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 					data[0x11], data[0x12], data[0x13], data[0x14], data[0x15], data[0x16], data[0x17]);
 			room->updateSettings(data[0x11] & 0xf, data[0x11] >> 4, data[0x14], data[0x12], data[0x13]);
 			room->sendRoomAttrs(replyPacket);
-			replyPacket.ack(read32(data, 8));
+			player->ackPacket(replyPacket, data);
 			room->sendRoomAttrs(relayPacket);
 			break;
 		}
 
 	case IN_GAME_OVER: // End of game (sent by owner for ranking games)
 		// TODO looks more like a game abort thing. Sent combined with LOBBY LOGOUT in case of error
-		DEBUG_LOG(game, "[%s] GAME OVER", player->getName().c_str());
+		INFO_LOG(game, "[%s] GAME OVER", player->getName().c_str());
 		// flags a000
 		replyPacket.init(Packet::REQ_NOP);
-		replyPacket.ack(read32(data, 8));
+		player->ackPacket(replyPacket, data);
 		room->gameStop(player);
 		break;
 
 	case IN_GAME_START:	// Start game
-		DEBUG_LOG(game, "[%s] GAME START", player->getName().c_str());
+		INFO_LOG(game, "[%s] GAME START", player->getName().c_str());
 		room->setInGame(player, true);
 		// FIXME also sent by the new room master (?) after a player disconnects in game
 		// send rng seed
 		room->sendRngSeed(replyPacket);
-		replyPacket.ack(read32(data, 8));
+		player->ackPacket(replyPacket, data);
 		break;
 
 	case IN_GAME_STOP: // End game
@@ -657,7 +659,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		// 07 bf ef 0c
 		room->setInGame(player, false);
 		replyPacket.init(Packet::REQ_NOP);
-		replyPacket.ack(read32(data, 8));
+		player->ackPacket(replyPacket, data);
 		room->gameStop(player);
 		break;
 
@@ -736,7 +738,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		break;
 
 	case IN_GAME_ENDED: // Game ended, sent by all players
-		DEBUG_LOG(game, "[%s] GAME ENDED", player->getName().c_str());
+		INFO_LOG(game, "[%s] GAME ENDED", player->getName().c_str());
 		// flags a000
 		// 0e 00 ef 0c 00 00 00 0c 00 00 23 28 02 00 00 00 ..........#(....
 		// 0a 20 0c 0c 38 bf ef 0c 60 29 0c 0c             . ..8...`)..
@@ -751,7 +753,7 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		// 0a 20 0c 0c 38 bf ef 0c 60 29 0c 0c             . ..8...`)..
 		room->gameStop(player);
 		room->sendRankUpdate(player, read32(data, 0x18), replyPacket);
-		replyPacket.ack(read32(data, 8));
+		player->ackPacket(replyPacket, data);
 		break;
 
 
@@ -831,6 +833,16 @@ void RankConnection::onReceive(const std::error_code& ec, size_t len)
 		send(data);
 	}
 	receive();
+}
+
+void RankConnection::startTimer()
+{
+	timer.expires_after(30s);
+	timer.async_wait([this](const std::error_code& ec) {
+		if (ec)
+			return;
+		socket.shutdown(asio::socket_base::shutdown_both);
+	});
 }
 
 RankAcceptor *RankAcceptor::Instance;
