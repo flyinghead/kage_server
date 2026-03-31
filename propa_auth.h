@@ -208,7 +208,8 @@ private:
 		timer.async_wait([this](const std::error_code& ec) {
 			if (ec)
 				return;
-			socket.shutdown(asio::socket_base::shutdown_both);
+			std::error_code ignored;
+			socket.shutdown(asio::socket_base::shutdown_both, ignored);
 		});
 	}
 

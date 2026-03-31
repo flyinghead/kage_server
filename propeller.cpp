@@ -809,7 +809,8 @@ void RankConnection::onReceive(const std::error_code& ec, size_t len)
 	{
 		if (ec && ec != asio::error::eof)
 			ERROR_LOG(Game::PropellerA, "rank: %s", ec.message().c_str());
-		socket.shutdown(asio::ip::tcp::socket::shutdown_both);
+		std::error_code ignored;
+		socket.shutdown(asio::socket_base::shutdown_both, ignored);
 		return;
 	}
 	if (len >= 0x34)
@@ -842,7 +843,8 @@ void RankConnection::startTimer()
 	timer.async_wait([this](const std::error_code& ec) {
 		if (ec)
 			return;
-		socket.shutdown(asio::socket_base::shutdown_both);
+		std::error_code ignored;
+		socket.shutdown(asio::socket_base::shutdown_both, ignored);
 	});
 }
 
