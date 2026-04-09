@@ -19,6 +19,7 @@
 #include "model.h"
 #include "discord.h"
 #include "log.h"
+#include <dcserver/status.hpp>
 #include <algorithm>
 #include <cctype>
 
@@ -126,7 +127,7 @@ void Player::ackRUdp(uint32_t seq)
 	ackedRelSeq = seq;
 	std::error_code ec;
 	timer.cancel(ec);
-	ping = ping * 0.7f + (Clock::now() - lastRUdpSend) / 1.0ms * 0.3f;
+	ping = ping * 0.5f + (Clock::now() - lastRUdpSend) / 1.0ms * 0.5f;
 	if (!relQueue.empty()) {
 		sendRel(relQueue.front().second, relQueue.front().first);
 		relQueue.pop_front();
@@ -252,6 +253,8 @@ void LobbyServer::addPlayer(Player *player)
 			player->getName().c_str(), player->getId(),
 			player->getEndpoint().address().to_string().c_str(), player->getEndpoint().port());
 	players[player->getEndpoint()] = player;
+	status::join(getDCNetGameId(game), player->getEndpoint().address().to_string(),
+			player->getEndpoint().port(), player->getName());
 }
 
 void LobbyServer::removePlayer(Player *player)
@@ -260,14 +263,18 @@ void LobbyServer::removePlayer(Player *player)
 		player->getLobby()->removePlayer(player);
 	players.erase(player->getEndpoint());
 	INFO_LOG(game, "Player %s [%x] left lobby server", player->getName().c_str(), player->getId());
+	status::leave(getDCNetGameId(game), player->getEndpoint().address().to_string(),
+			player->getEndpoint().port(), player->getName());
 	delete player;
 }
 
 void LobbyServer::send(Packet& packet, const asio::ip::udp::endpoint& endpoint)
 {
 	size_t pktsize = packet.finalize();
-	std::error_code ec2;
-	socket.send_to(asio::buffer(packet.data, pktsize), endpoint, 0, ec2);
+	std::error_code ec;
+	socket.send_to(asio::buffer(packet.data, pktsize), endpoint, 0, ec);
+	if (ec)
+		WARN_LOG(game, "send to %s:%d failed: %s", endpoint.address().to_string().c_str(), endpoint.port(), ec.message().c_str());
 }
 
 static inline void strtolower(std::string& str) {
@@ -937,14 +944,6 @@ Room *LobbyServer::addRoom(const std::string& name, uint32_t attributes, Player 
 	return room;
 }
 
-void LobbyServer::getStatus(int& playerCount, int& gameCount)
-{
-	playerCount = players.size();
-	gameCount = 0;
-	for (const Lobby& lobby : lobbies)
-		gameCount += lobby.getRooms().size();
-}
-
 bool Room::DumpNetData = false;
 
 Room::Room(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
@@ -1139,9 +1138,13 @@ void Lobby::addRoom(Room *room)
 		if (pl != owner)
 			lobbyUsers.push_back(pl->getName());
 	discordGameCreated(server.game, owner->getName(), room->getName(), lobbyUsers);
+	status::createGame(getDCNetGameId(server.game));
+
 }
 
-void Lobby::removeRoom(Room *room) {
+void Lobby::removeRoom(Room *room)
+{
+	status::deleteGame(getDCNetGameId(server.game));
 	rooms.erase(room->getId());
 	delete room;
 }

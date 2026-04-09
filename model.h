@@ -335,7 +335,6 @@ public:
 	void removePlayer(Player *player);
 	void send(Packet& packet, const asio::ip::udp::endpoint& endpoint);
 	virtual Room *addRoom(const std::string& name, uint32_t attributes, Player *owner);
-	void getStatus(int& playerCount, int& gameCount);
 
 	const Game game;
 

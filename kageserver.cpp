@@ -36,6 +36,8 @@ extern "C" {
 #define DATADIR "."
 #endif
 
+using namespace std::chrono_literals;
+
 static std::map<std::string, std::string> Config;
 std::string DataDir;
 
@@ -183,21 +185,11 @@ void BootstrapServer::onUpdateTimer(const std::error_code& ec)
 {
 	if (ec)
 		return;
-	int playerCount;
-	int gameCount;
-	bombermanServer.getStatus(playerCount, gameCount);
-	statusUpdate("bomberman", playerCount, gameCount);
-	outtriggerServer.getStatus(playerCount, gameCount);
-	statusUpdate("outtrigger", playerCount, gameCount);
-	propellerServer.getStatus(playerCount, gameCount);
-	statusUpdate("propeller", playerCount, gameCount);
-	try {
-		statusCommit("kage");
-	} catch (const std::exception& e) {
-		ERROR_LOG(Game::None, "statusCommit failed: %s", e.what());
-	}
-
-	statusTimer.expires_after(asio::chrono::seconds(statusGetInterval()));
+	if (statusTimer.expiry().time_since_epoch() == 0ms)
+		status::reset("kage");
+	else
+		status::ping("kage");
+	statusTimer.expires_after(asio::chrono::seconds(status::pingInterval()));
 	statusTimer.async_wait(std::bind(&BootstrapServer::onUpdateTimer, this, asio::placeholders::error));
 }
 

@@ -22,3 +22,4 @@
 
 void discordLobbyJoined(Game gameId, const std::string& username, const std::vector<std::string>& playerList);
 void discordGameCreated(Game gameId, const std::string& username, const std::string& gameName, const std::vector<std::string>& playerList);
+const char *getDCNetGameId(Game game);
