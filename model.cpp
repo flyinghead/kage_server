@@ -253,8 +253,6 @@ void LobbyServer::addPlayer(Player *player)
 			player->getName().c_str(), player->getId(),
 			player->getEndpoint().address().to_string().c_str(), player->getEndpoint().port());
 	players[player->getEndpoint()] = player;
-	status::join(getDCNetGameId(game), player->getEndpoint().address().to_string(),
-			player->getEndpoint().port(), player->getName());
 }
 
 void LobbyServer::removePlayer(Player *player)
@@ -325,6 +323,8 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			//dumpData(data + 0x10, len - 0x10);
 			player->setName((const char *)&data[0x20]);
 			player->setExtraData(&data[0x138], read32(data, 0x14));
+			status::join(getDCNetGameId(game), player->getEndpoint().address().to_string(),
+					player->getEndpoint().port(), player->getName());
 
 			replyPacket.init(Packet::RSP_LOGIN_SUCCESS2);
 			replyPacket.writeData((uint32_t)socket.local_endpoint().port());

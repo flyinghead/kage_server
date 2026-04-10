@@ -133,7 +133,6 @@ private:
 				// uses 16 bytes of key at offset 4-13
 				// will respond with MSG3
 				sendBuffer.fill(0);
-				//strcpy((char *)&sendBuffer[4], "0123456789012345");
 				encrypt(sendBuffer.data(), sendBuffer.size());
 				send();
 				break;
@@ -144,7 +143,6 @@ private:
 				std::array<uint8_t, KEY_SIZE> key2;
 				key2 = key;
 				memset(key2.data(), 0, 16);
-				//strcpy((char *)key2.data(), "0123456789012345");
 				initBlowfish(key2.data());
 				decrypt(recvBuffer.data() + 0x40, len - 0x40);
 				DEBUG_LOG(game, "MSG3:");
@@ -174,7 +172,6 @@ private:
 				// uses 16 bytes of key at offset 4-13
 				// will respond with MSG4
 				sendBuffer.fill(0);
-				//strcpy((char *)&sendBuffer[4], "0123456789012345");
 				encrypt(sendBuffer.data(), sendBuffer.size());
 				send();
 				break;
@@ -185,7 +182,6 @@ private:
 				std::array<uint8_t, KEY_SIZE> key2;
 				key2 = key;
 				memset(key2.data(), 0, 16);
-				//strcpy((char *)key2.data(), "0123456789012345");
 				initBlowfish(key2.data());
 				decrypt(recvBuffer.data() + 0x40, len - 0x40);
 				DEBUG_LOG(game, "MSG4: user name: %s", &recvBuffer[0x74]);
