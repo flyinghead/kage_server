@@ -387,11 +387,9 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					replyPacket.writeData(lobby->getPlayerCount());
 					for (Player *pl : lobby->getPlayers())
 					{
-						if (pl == player)
-							continue;
 						replyPacket.writeData(pl->getName().c_str(), 0x10);
 						replyPacket.writeData(pl->getId());
-						const auto& extra = player->getExtraData();
+						const auto& extra = pl->getExtraData();
 						replyPacket.writeData((uint32_t)extra.size());
 						replyPacket.writeData(extra.data(), extra.size());
 					}
@@ -414,15 +412,13 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					}
 					else
 					{
-						const std::vector<Player *> players = room->getPlayers();
+						const std::vector<Player *>& players = room->getPlayers();
 						replyPacket.writeData((uint32_t)players.size());
 						for (Player *pl : players)
 						{
-							if (pl == player)
-								continue;
 							replyPacket.writeData(pl->getName().c_str(), 0x10);
 							replyPacket.writeData(pl->getId());
-							const auto& extra = player->getExtraData();
+							const auto& extra = pl->getExtraData();
 							replyPacket.writeData((uint32_t)extra.size());
 							replyPacket.writeData(extra.data(), extra.size());
 						}
@@ -519,12 +515,6 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				replyPacket.writeData(room->getId());
 				player->ackPacket(replyPacket, data);
 
-				// Push room status to new player
-				replyPacket.init(Packet::REQ_CHG_ROOM_ATTR);
-				replyPacket.writeData(room->getId());
-				replyPacket.writeData("STAT", 4);
-				replyPacket.writeData(room->getAttributes());
-
 				room->createJoinRoomReply(replyPacket, relayPacket, player);
 			}
 			break;
@@ -534,23 +524,40 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			if (data[0] & 0x10)
 			{
 				// lobby
-				replyPacket.respOK(Packet::REQ_LEAVE_LOBBY_ROOM);
-				replyPacket.flags |= Packet::FLAG_LOBBY;
 				Lobby *lobby = player->getLobby();
 				if (lobby != nullptr)
+				{
 					lobby->removePlayer(player);
+					replyPacket.respOK(Packet::REQ_LEAVE_LOBBY_ROOM);
+					replyPacket.writeData(lobby->getId());
+				}
+				else {
+					replyPacket.respFailed(Packet::REQ_LEAVE_LOBBY_ROOM);
+				}
+				replyPacket.flags |= Packet::FLAG_LOBBY;
 			}
 			else
 			{
-				replyPacket.respOK(Packet::REQ_LEAVE_LOBBY_ROOM);
 				Room *room = player->getRoom();
-				if (room != nullptr) {
+				if (room != nullptr)
+				{
+					replyPacket.respOK(Packet::REQ_LEAVE_LOBBY_ROOM);
+					replyPacket.writeData(room->getId());
 					// Remove player from the room
 					if (room->removePlayer(player))
 						player->getLobby()->removeRoom(room);
 				}
+				else {
+					replyPacket.respFailed(Packet::REQ_LEAVE_LOBBY_ROOM);
+				}
 			}
 			player->ackPacket(replyPacket, data);
+
+			relayPacket.init(Packet::REQ_LEAVE_LOBBY_ROOM);
+			relayPacket.flags |= Packet::FLAG_RUDP;
+			if (data[0] & 0x10)
+				relayPacket.flags |= Packet::FLAG_LOBBY;
+			relayPacket.writeData(player->getId());
 			break;
 		}
 	case Packet::REQ_QRY_ROOMS:
@@ -689,9 +696,8 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					DEBUG_LOG(game, "[%s] CHAT: %s", player->getName().c_str(), &data[0x10]);
 					// Broadcast to other players in the lobby/room
 					relayPacket.init(Packet::REQ_CHAT);
-					relayPacket.flags |= Packet::FLAG_RUDP | Packet::FLAG_RELAY | (flags & Packet::FLAG_LOBBY);
-					// relayed player id
-					memcpy(&relayPacket.data[relayPacket.startOffset + 4], &data[4], sizeof(uint32_t));
+					relayPacket.flags |= Packet::FLAG_RUDP | (flags & Packet::FLAG_LOBBY);
+					relayPacket.relay(player->getId());
 					// message
 					relayPacket.writeData(&data[0x10], (flags & 0x3ff) - 0x10);
 
@@ -750,9 +756,8 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 						{
 							Packet packet;
 							packet.init(Packet::REQ_DM_CHAT);
-							packet.flags |= Packet::FLAG_RUDP | Packet::FLAG_RELAY | (flags & Packet::FLAG_LOBBY);
-							// relayed player id
-							memcpy(&packet.data[4], &data[4], sizeof(uint32_t));
+							packet.flags |= Packet::FLAG_RUDP | (flags & Packet::FLAG_LOBBY);
+							packet.relay(player->getId());
 							// message
 							packet.writeData(data + 0x10, len - 0x10);
 							destPlayer->send(packet);
@@ -779,6 +784,15 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		replyPacket.respOK(Packet::REQ_CHG_USER_PROP);
 		player->ackPacket(replyPacket, data);
 		replyPacket.data[2] = data[2]; // propeller arena needs this (only checked for REQ_CHG_USER_PROP)
+		{
+			relayPacket.init(Packet::REQ_CHG_USER_PROP);
+			relayPacket.flags |= Packet::FLAG_RUDP;
+			relayPacket.data[2] = data[2];
+			relayPacket.writeData(player->getId());
+			const auto& extra = player->getExtraData();
+			relayPacket.writeData((uint32_t)extra.size());
+			relayPacket.writeData(extra.data(), extra.size());
+		}
 		break;
 
 	case Packet::REQ_QRY_ROOM_ATTR:
@@ -818,18 +832,6 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			player->ackPacket(replyPacket, data);
 			break;
 		}
-
-	case Packet::REQ_AUDIO_START:
-		DEBUG_LOG(game, "[%s] REQ_AUDIO_START", player->getName().c_str());
-		replyPacket.respOK(Packet::REQ_AUDIO_START);
-		player->ackPacket(replyPacket, data);
-		break;
-
-	case Packet::REQ_AUDIO_STOP:
-		DEBUG_LOG(game, "[%s] REQ_AUDIO_STOP", player->getName().c_str());
-		replyPacket.respOK(Packet::REQ_AUDIO_STOP);
-		player->ackPacket(replyPacket, data);
-		break;
 
 	case Packet::REQ_SEARCH_USERS:
 		{
@@ -1017,6 +1019,18 @@ int Room::getPlayerIndex(const Player *player) const
 		return -1;
 	else
 		return i;
+}
+
+void Room::createJoinRoomReply(Packet& reply, Packet& relay, Player *player)
+{
+	if (Room *room = player->getRoom())
+	{
+		// Push room status to new player
+		reply.init(Packet::REQ_CHG_ROOM_ATTR);
+		reply.writeData(room->getId());
+		reply.writeData("STAT", 4);
+		reply.writeData(room->getAttributes());
+	}
 }
 
 void Room::openNetdump()

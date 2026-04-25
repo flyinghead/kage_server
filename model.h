@@ -203,9 +203,7 @@ public:
 
 	virtual void rudpAcked(Player *player) {
 	}
-	virtual void createJoinRoomReply(Packet& reply, Packet& relay, Player *player) {
-	}
-
+	virtual void createJoinRoomReply(Packet& reply, Packet& relay, Player *player);
 	void writeNetdump(const uint8_t *data, uint32_t len, const asio::ip::udp::endpoint& endpoint) const;
 
 	static bool DumpNetData;

@@ -57,6 +57,7 @@ public:
 		REQ_LOBBY_LOGIN = 1,
 		REQ_LOBBY_LOGOUT = 2,
 		REQ_CREATE_ROOM = 4,
+		REQ_DELETE_ROOM = 5,
 		REQ_JOIN_LOBBY_ROOM = 6,
 		REQ_LEAVE_LOBBY_ROOM = 7,
 		REQ_CHG_ROOM_ATTR = 8,
@@ -73,6 +74,7 @@ public:
 		REQ_AUDIO_STOP = 0x13,
 		REQ_PING = 0x14,
 		REQ_SEARCH_USERS = 0x25,
+		REQ_AUDIO = 0x32,
 
 		RSP_TAG_CMD = 0x10,
 		RSP_OK = 0x28,
@@ -154,6 +156,11 @@ public:
 	void ack(uint32_t seq) {
 		flags |= Packet::FLAG_ACK;
 		write32(data, startOffset + 0xc, seq);
+	}
+
+	void relay(uint32_t playerId) {
+		flags |= Packet::FLAG_RELAY;
+		write32(data, startOffset + 4, playerId);
 	}
 
 	size_t finalize()

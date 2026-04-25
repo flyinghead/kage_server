@@ -304,7 +304,7 @@ void PARoom::sendGameData(const std::error_code& ec)
 			}
 		}
 		for (unsigned i = 0; i < players.size(); i++)
-			if (playerState[i].inGame)
+			if (playerState[i].seqnum > 0)
 				players[i]->send(packet);
 	}
 
@@ -550,11 +550,44 @@ bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t l
 	if (flags & Packet::FLAG_ACK)
 		player->ackRUdp(read32(data, 0xc));
 
-	// TODO? if (data[3] == Packet::REQ_CHAT)
+	switch (data[3])
+	{
+	case Packet::REQ_AUDIO_START:
+		DEBUG_LOG(game, "[%s] REQ_AUDIO_START", player->getName().c_str());
+		replyPacket.init(Packet::REQ_AUDIO_START);
+		player->ackPacket(replyPacket, data);
+		replyPacket.writeData(player->getId()); // not used
 
-	if (data[3] != Packet::REQ_GAME_DATA)
+		relayPacket.init(Packet::REQ_AUDIO_START);
+		relayPacket.flags |= Packet::FLAG_RUDP;
+		relayPacket.writeData(player->getId()); // not used
+		return true;
+
+	case Packet::REQ_AUDIO_STOP:
+		DEBUG_LOG(game, "[%s] REQ_AUDIO_STOP", player->getName().c_str());
+		replyPacket.init(Packet::REQ_AUDIO_STOP);
+		player->ackPacket(replyPacket, data);
+		replyPacket.writeData(player->getId()); // not used
+
+		relayPacket.init(Packet::REQ_AUDIO_STOP);
+		relayPacket.flags |= Packet::FLAG_RUDP;
+		relayPacket.writeData(player->getId()); // not used
+		return true;
+
+	case Packet::REQ_AUDIO:
+		relayPacket.init(Packet::REQ_AUDIO);
+		relayPacket.relay(player->getId());
+		relayPacket.writeData(data + 0x10, len - 0x10);
+		return true;
+
+	case Packet::REQ_GAME_DATA:
+		// handled below
+		break;
+
+	default:
+		// default handling
 		return false;
-
+	}
 	PARoom *room = (PARoom *)player->getRoom();
 	if (room == nullptr)
 		return true;
