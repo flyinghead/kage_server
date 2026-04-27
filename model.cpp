@@ -291,8 +291,13 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 		player = it->second;
 		player->setAlive();
 	}
+	// Record if a sent packet is ack'ed
+	const uint16_t flags = read16(data, 0);
+	if (flags & Packet::FLAG_ACK)
+		player->ackRUdp(read32(data, 0xc));
+
 	// Check if we have handled this RUdp packet already
-	if (read16(data, 0) & Packet::FLAG_RUDP)
+	if (flags & Packet::FLAG_RUDP)
 	{
 		if (rudpIgnore)
 			return;

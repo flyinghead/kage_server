@@ -546,10 +546,6 @@ static void dumpGameData(Player *player, int slot, const uint8_t *data)
 
 bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t len)
 {
-	uint16_t flags = read16(data, 0);
-	if (flags & Packet::FLAG_ACK)
-		player->ackRUdp(read32(data, 0xc));
-
 	switch (data[3])
 	{
 	case Packet::REQ_AUDIO_START:

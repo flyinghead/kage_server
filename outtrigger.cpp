@@ -34,10 +34,6 @@ Room *OuttriggerServer::addRoom(const std::string& name, uint32_t attributes, Pl
 
 bool OuttriggerServer::handlePacket(Player *player, const uint8_t *data, size_t len)
 {
-	uint16_t flags = read16(data, 0);
-	if (flags & Packet::FLAG_ACK)
-		player->ackRUdp(read32(data, 0xc));
-
 	if (data[3] == Packet::REQ_CHAT)
 	{
 		uint16_t flags = read16(data, 0);

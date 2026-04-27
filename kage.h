@@ -163,6 +163,13 @@ public:
 		write32(data, startOffset + 4, playerId);
 	}
 
+	uint8_t *advance(int size)
+	{
+		uint8_t *p = &this->data[this->size];
+		this->size += size;
+		return p;
+	}
+
 	size_t finalize()
 	{
 		const uint16_t chunkSize = size - startOffset;
