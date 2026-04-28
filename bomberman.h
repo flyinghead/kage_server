@@ -2,7 +2,7 @@
 	Kage game server.
 	Copyright 2019 Shuouma <dreamcast-talk.com>
     Copyright 2026 Flyinghead <flyinghead.github@gmail.com>
-    Copyright 2026 Larkus / LikeAGFeld
+    Copyright 2026 Farkus / LikeAGFeld
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
