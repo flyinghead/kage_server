@@ -473,6 +473,7 @@ void PropellerServer::sendPlayerAttrs(Player *player)
 	replyPacket.writeData(player->getId());
 }
 
+/*
 static void dumpGameData(Player *player, int slot, const uint8_t *data)
 {
 	printf("[%6s] gamedata[%d]: C ", player == nullptr ? "" : player->getName().c_str(), slot);
@@ -543,6 +544,7 @@ static void dumpGameData(Player *player, int slot, const uint8_t *data)
 	// 00 00 00 00 ....
 	// long (flag?)
 }
+*/
 
 bool PropellerServer::handlePacket(Player *player, const uint8_t *data, size_t len)
 {

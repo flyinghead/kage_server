@@ -38,6 +38,9 @@ union BMCmd
 
 	enum {
 		// GAME_DATA (0x11)
+		BOMB_DATA = 1,
+		MAP_DATA = 2,
+		POS_DATA = 3,
 		START_TIMER = 4,
 		NEXT_TIMER = 5,
 		SET_RULES = 7,
@@ -60,6 +63,9 @@ union BMCmd
 		READY_MASK = 0x11,
 		GAME_STARTING = 0x13,
 		TIME_INFO = 0x14,
+		END_GAME = 0x15,
+		SET_DEAD_BITS = 0x16,
+		CMPL_DEAD_BITS = 0x19,
 	};
 };
 
@@ -109,6 +115,14 @@ struct CompactUser
 	Position pos;
 	uint8_t unk = 0;	// 4=dead?
 	uint8_t dir = 0;	// 1=left, 2=right, 4=up, 8=down
+
+	CompactUser() {
+		unk = 0;
+		dir = 0;
+	}
+	CompactUser(const uint8_t *data) {
+		readFrom(data);
+	}
 
 	void readFrom(const uint8_t *data)
 	{
@@ -234,27 +248,37 @@ private:
 	void broadcastKeyholder() const;
 	void broadcastReadySlotMask() const;
 	void writePlayersPos(Packet& packet);
-//	void startTickTimer();
-//	void stopTickTimer();
-//	void onTickTimer(const std::error_code& ec);
+	void startGameTimer();
+	void writeTimestamp(Packet& packet);
+	std::chrono::minutes getTimeLimit() const;
+	void endGame(int winner);
+	uint32_t getDeadPlayers() const;
 
 	struct State
 	{
-		// TODO need a status
-		bool joining = false;
-		bool rulesAccepted = false;
-		bool mapInfoStarted = false;
-		bool mapInfoSent = false;
+		enum Status {
+			None = 0,
+			Joining = 1,
+			InRoom = 2,
+			RulesAccepted = 3,
+			MapInfoStarted = 4,
+			MapInfoSent = 5,
+			SettleDeadBits = 6,
+			CompletedDeadBits = 7,
+		};
+		Status status = None;
 		CompactUser positions[4];
 		uint32_t cmd1Timestamp = 0;
+		std::array<bool, 4> dead {};
 	};
 	std::array<State, 8> states;
 	std::vector<int> slots;	// slots used by each player
 	asio::steady_timer timer;
-	bool tickTimerStarted = false;
+	asio::steady_timer gameTimer;
 	std::array<uint8_t, 9> rules {};
 	uint16_t ruleSetter = 0; // client ID of the room owner with msb set (8000)
 	bool inGame = false;
+	bool gameEnded = false;
 	std::array<PowerUp, 28> powerUps;
 	std::array<uint8_t, 16> brickMap;
 	std::array<Bomb, 24> bombs;
