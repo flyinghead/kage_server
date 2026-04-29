@@ -261,8 +261,11 @@ void BMRoom::rudpAcked(Player *player)
 		if (allDone)
 		{
 			DEBUG_LOG(Game::Bomberman, "All players have ended the game");
-			inGame = false;
-			gameEnded = true;
+			gameNumber++;
+			if (gameNumber < rules[2])
+				resetGame();
+			else
+				resetMatch();
 		}
 		// FIXME BMCmd::END_GAME makes the room owner disconnect the line?
 		// 0x17 confuses the owner/winner
@@ -344,7 +347,7 @@ void BMRoom::sendRules(Packet& packet)
 	packet.writeData(rules.data(), rules.size());
 }
 
-void BMRoom::mapInfoSent(Player *player)
+void BMRoom::playerInGame(Player *player)
 {
 	int idx = getPlayerIndex(player);
 	if (idx >= 0)
@@ -355,7 +358,6 @@ void BMRoom::mapInfoSent(Player *player)
 			inGame = inGame && (states[i].status == State::MapInfoSent);
 		if (inGame)
 		{
-			// TODO should be sent only once?
 			DEBUG_LOG(Game::Bomberman, "%s: all MapInfo sent. sending game time info", player->getName().c_str());
 			Packet packet;
 			BMCmd cmd {};
@@ -585,13 +587,21 @@ std::chrono::minutes BMRoom::getTimeLimit() const {
 
 void BMRoom::startGameTimer()
 {
-	// Adding 1 sec to avoid ending the game before the game timer reaches 0
-	gameTimer.expires_after(getTimeLimit() + 1s);
+	// Adding 2 sec to avoid ending the game before the game timer reaches 0
+	gameTimer.expires_after(getTimeLimit() + 2s);
 	gameTimer.async_wait([this](const std::error_code& ec) {
 		if (ec)
 			return;
 		INFO_LOG(Game::Bomberman, "Game end: time limit");
-		endGame(-1);
+		for (Player *player : players)
+		{
+			// force ending
+			states[getPlayerIndex(player)].endOfGameMask = 7;
+			Packet packet;
+			sendEndOfGame(player, packet);
+			if (!packet.empty())
+				player->send(packet);
+		}
 	});
 }
 
@@ -609,30 +619,12 @@ void BMRoom::saveMapInfo(Player *player, const uint8_t *data, bool last)
 	DEBUG_LOG(Game::Bomberman, "%d bomb(s) per player", bombsPerPlayer);
 }
 
-void BMRoom::endGame(int winnerIdx)
+bool BMRoom::checkEndOfGame(Player *player, uint8_t command)
 {
-	if (!inGame)
-		return;
-	for (auto& state : states)
-		if (state.status == State::MapInfoSent)
-			state.status = State::GameEnd;
-	for (auto& player : players)
-		player->notifyRoomOnAck();
-	BMCmd cmd { BMCmd::CMPL_DEAD_BITS, 4 };	// completed dead bits
-	Packet packet;
-	packet.init(Packet::REQ_CHAT);
-	packet.flags |= Packet::FLAG_RUDP;
-	packet.writeData(cmd.full);
-	packet.writeData((uint16_t)0);
-	packet.writeData(getDeadPlayers());
-	Player::sendToAll(packet, players);
-}
-
-void BMRoom::checkEndOfGame(Player *player)
-{
-	if (states[getPlayerIndex(player)].status != State::MapInfoSent)
-		return;
-	int winnerIdx = -1;
+	State& playerState = states[getPlayerIndex(player)];
+	if (playerState.status != State::MapInfoSent)
+		return false;
+	const int mask = 1 << (command - 1);
 	if (rules[0] == 0)
 	{
 		// Survival mode
@@ -643,15 +635,14 @@ void BMRoom::checkEndOfGame(Player *player)
 			const int slots = getSlotCount(players[pl]);
 			const State& state = states[pl];
 			for (int slot = 0; slot < slots && alivePlayers <= 1; slot++)
-				if (!state.dead[slot]) {
+				if (!state.dead[slot])
 					alivePlayers++;
-					winnerIdx = pl;
-				}
 		}
-		if (alivePlayers <= 1)
+		if (alivePlayers <= 1) {
 			INFO_LOG(Game::Bomberman, "Game end: %d player remaining", alivePlayers);
-		else
-			winnerIdx = -1;
+			playerState.endOfGameMask |= mask;
+			return playerState.endOfGameMask == 7;
+		}
 	}
 	else
 	{
@@ -663,24 +654,53 @@ void BMRoom::checkEndOfGame(Player *player)
 			for (int slot = 0; slot < slots; slot++)
 				if (state.positions[slot].unk == 0x80) {
 					INFO_LOG(Game::Bomberman, "Game end: player %d won", getPlayerPosition(players[pl]) + slot);
-					winnerIdx = pl;
-					break;
+					playerState.endOfGameMask |= mask;
+					return playerState.endOfGameMask == 7;
 				}
 		}
 	}
-	if (winnerIdx != -1)
+	return false;
+}
+
+void BMRoom::sendEndOfGame(Player *player, Packet& packet)
+{
+	State& state = states[getPlayerIndex(player)];
+	if (state.status == State::GameEnd)
+		return;
+	if (state.endOfGameMask != 7)
+		return;
+	state.status = State::GameEnd;
+	player->notifyRoomOnAck();
+	BMCmd cmd { BMCmd::CMPL_DEAD_BITS, 4 };
+	if (gameNumber < rules[2] - 1)
+		cmd.command = BMCmd::SET_DEAD_BITS;
+	packet.init(Packet::REQ_CHAT);
+	packet.flags |= Packet::FLAG_RUDP;
+	packet.writeData(cmd.full);
+	packet.writeData((uint16_t)0);
+	packet.writeData(getDeadPlayers());
+}
+
+void BMRoom::resetGame()
+{
+	inGame = false;
+	for (unsigned i = 0; i < players.size(); i++)
 	{
-		states[getPlayerIndex(player)].status = State::GameEnd;
-		player->notifyRoomOnAck();
-		BMCmd cmd { BMCmd::CMPL_DEAD_BITS, 4 };
-		Packet packet;
-		packet.init(Packet::REQ_CHAT);
-		packet.flags |= Packet::FLAG_RUDP;
-		packet.writeData(cmd.full);
-		packet.writeData((uint16_t)0);
-		packet.writeData(getDeadPlayers());
-		player->send(packet);
+		State& state = states[i];
+		state.cmd1Timestamp = 0;
+		state.dead.fill(false);
+		state.endOfGameMask = 0;
+		state.positions.fill({});
+		// we don't reset the status since it should be correct
 	}
+	powerUps.fill({});
+	brickMap.fill(0);
+	bombs.fill({});
+}
+
+void BMRoom::resetMatch() {
+	resetGame();
+	gameNumber = 0;
 }
 
 BombermanServer::BombermanServer(uint16_t port, asio::io_context& io_context)
@@ -722,11 +742,12 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 				room->saveBombState(player, data + 0x38);
 				room->saveBrickMap(player, data + 0xC8);
 				room->makeCmd1Packet(player, replyPacket);
-				// TODO do it after cmd1? need to flush before
-				// doing it in cmd3 freezes the client if the dead status appears first in the cmd3 packet
-				player->send(replyPacket);
-				replyPacket.reset();
-				room->checkEndOfGame(player);
+				if (room->checkEndOfGame(player, BMCmd::BOMB_DATA))
+				{
+					player->send(replyPacket);
+					replyPacket.reset();
+					room->sendEndOfGame(player, replyPacket);
+				}
 			}
 			break;
 
@@ -751,6 +772,12 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			room->savePowerUps(player, data + 0x34);
 			room->saveBrickMap(player, data + 0xA4);
 			room->makeCmd2Packet(replyPacket);
+			if (room->checkEndOfGame(player, BMCmd::MAP_DATA))
+			{
+				player->send(replyPacket);
+				replyPacket.reset();
+				room->sendEndOfGame(player, replyPacket);
+			}
 			break;
 
 		case BMCmd::POS_DATA:
@@ -764,6 +791,12 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			}
 			room->savePlayerCoords(player, data + 0x14);
 			room->makeCmd3Packet(replyPacket);
+			if (room->checkEndOfGame(player, BMCmd::POS_DATA))
+			{
+				player->send(replyPacket);
+				replyPacket.reset();
+				room->sendEndOfGame(player, replyPacket);
+			}
 			break;
 
 		case BMCmd::START_TIMER:		// CalcTimer_First
@@ -814,7 +847,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		// only sent by owner?
 		// NOT USED...
 
-		case BMCmd::START_GAME:
+		case BMCmd::START_BATTLE:
 			{
 				// 0000   a0 18 00 11 00 00 10 02 00 00 00 09 00 00 00 00   ................
 				// 0010   14 04 80 00 00 00 de 92 ba 47 66 10               .........Gf.
@@ -870,29 +903,27 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			relayPacket.writeData(data + 0x10, len - 0x10);
 			break;
 
-		case BMCmd::POST_MAP:	// Game-phase marker after map block exchange
-			DEBUG_LOG(Game::Bomberman, "%s: map block done. client ID %x", player->getName().c_str(), *(const uint16_t *)&data[0x12]);
+		case BMCmd::START_GAME:	// map info sent, ready to start sending game data
+			DEBUG_LOG(Game::Bomberman, "%s: START GAME. client ID %x", player->getName().c_str(), *(const uint16_t *)&data[0x12]);
 			// a0 14 00 11 00 00 10 01 00 00 00 0f 00 00 00 00 ................
 			// 1c 00 08 00                                     ....
 			replyPacket.init(Packet::REQ_NOP);
 			player->ackPacket(replyPacket, data);
-			room->mapInfoSent(player);
+			room->playerInGame(player);
 			break;
 
-		case 0xf:	// ??? response to udpF 17
-			DEBUG_LOG(Game::Bomberman, "%s: received UDP 11 sub F", player->getName().c_str());
+		case BMCmd::RESTART_GAME: // map info sent, ready to start sending game data (for 2nd+ games in same match)
+			// 0000   a0 14 00 11 00 00 10 01 00 00 00 13 00 00 00 00   ................
+			// 0010   1e 00 80 00 ba 47 66 10                           .....Gf.
+			DEBUG_LOG(Game::Bomberman, "%s: RESTART GAME", player->getName().c_str());
 			replyPacket.init(Packet::REQ_NOP);
 			player->ackPacket(replyPacket, data);
-
-			relayPacket.init(Packet::REQ_CHAT);
-			relayPacket.flags |= Packet::FLAG_RUDP;
-			relayPacket.writeData(cmd.full);
-			relayPacket.writeData(read16(data, 0x12));
+			room->playerInGame(player);
 			break;
 
-		case 0x10:	// Client battle-end/settle signal observed after server cmd 0x19
-			// resets game time info received
-			DEBUG_LOG(Game::Bomberman, "%s: battle end client signal cmd=10", player->getName().c_str());
+		case BMCmd::END_GAME: // game has ended, responding to settle/completed dead bits (16,19)
+			// Game resets game time info received and start sending synctimer 2 s later if match isn't over (msg 16)
+			DEBUG_LOG(Game::Bomberman, "%s: END GAME cmd=10", player->getName().c_str());
 			replyPacket.init(Packet::REQ_NOP);
 			player->ackPacket(replyPacket, data);
 			// no effect room->broadcastReadySlotMask();
@@ -900,26 +931,24 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			// sending packet F, 10 or 17 doesn't work
 			break;
 
-		case 0x13:	// TODO post-match advance
-			// after this game unlocks the room if owner
-			// then send rudp11 sub F 2 sec later (likely) -> new game?
+		case BMCmd::END_BATTLE:	// battle has ended, returning to game room
+			// Only received when match is over. Next message is room unlock if owner.
 			// a8 14 00 11 00 00 10 02 00 00 00 10 00 00 00 00 ................
 			// 26 00 80 00                                     &...
-			DEBUG_LOG(Game::Bomberman, "%s: post-game advance cmd=13", player->getName().c_str());
-			replyPacket.init(Packet::REQ_NOP);
+			DEBUG_LOG(Game::Bomberman, "%s: END BATTLE cmd=13", player->getName().c_str());
+			//replyPacket.init(Packet::REQ_NOP);
 			//room->sendRules(replyPacket);
-			player->ackPacket(replyPacket, data);
 			//room->broadcastReadySlotMask();
-			/*
 			{
-				player->send(replyPacket);
-				replyPacket.reset();
-				BMCmd cmd { BMCmd::END_GAME, 0 };
+				//player->send(replyPacket);
+				//replyPacket.reset();
+				// this avoids the disconnection error of the room owner, but doesn't help with the freeze
+				BMCmd cmd { 0x15, 0 }; // abort game play?
 				replyPacket.init(Packet::REQ_CHAT);
+				player->ackPacket(replyPacket, data);
 				replyPacket.writeData(cmd.full);
 				replyPacket.writeData((uint16_t)0);
 			}
-			*/
 			break;
 
 		case BMCmd::MAP_INFO: // SendGameMapBlock: Send MapInfo

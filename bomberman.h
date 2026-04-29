@@ -44,11 +44,14 @@ union BMCmd
 		START_TIMER = 4,
 		NEXT_TIMER = 5,
 		SET_RULES = 7,
-		START_GAME = 0xa,
+		START_BATTLE = 0xa,
 		ACCEPT_RULES = 0xb,
 		ACK_RULES = 0xc,
 		ACK_START = 0xd,
-		POST_MAP = 0xe,
+		START_GAME = 0xe,
+		RESTART_GAME = 0xf,
+		END_GAME = 0x10,
+		END_BATTLE = 0x13,
 		MAP_INFO = 0x1a,
 		MAP_INFO_LAST = 0x1b,
 
@@ -61,9 +64,10 @@ union BMCmd
 		ROSTER_LIST = 0xa,
 		NEW_MASTER = 0xe,
 		READY_MASK = 0x11,
+		ABORT_GAME = 0x12,	// "A game was not able to be started."
 		GAME_STARTING = 0x13,
 		TIME_INFO = 0x14,
-		END_GAME = 0x15,
+		//DISCONNECT? = 0x15,
 		SET_DEAD_BITS = 0x16,
 		CMPL_DEAD_BITS = 0x19,
 	};
@@ -240,7 +244,7 @@ public:
 	void setRules(const uint8_t *p, uint16_t rulesWord);
 	void sendRules(Packet& packet);
 	void sendGameStarting(Packet& packet, uint16_t clientId);
-	void mapInfoSent(Player *player);
+	void playerInGame(Player *player);
 
 	uint32_t getHostCount() const {
 		return (uint32_t)players.size();
@@ -251,6 +255,12 @@ public:
 	uint8_t getSlotMask(const Player *player) const;
 
 	const std::array<uint8_t, 9>& getRules() const {
+		// 9 bytes
+		// 0: game mode 0=survival, 1=hyper bomber
+		// 1: stage [0-6]
+		// 2: games per match
+		// 3: time limit - 1 (min)
+		// 5: 1=random placement
 		return rules;
 	}
 
@@ -263,7 +273,8 @@ public:
 	void makeCmd1Packet(Player *player, Packet& packet);
 	void makeCmd2Packet(Packet& packet);
 	void makeCmd3Packet(Packet& packet);
-	void checkEndOfGame(Player *player);
+	bool checkEndOfGame(Player *player, uint8_t command);
+	void sendEndOfGame(Player *player, Packet& packet);
 
 private:
 	void updateSlots();
@@ -274,8 +285,9 @@ private:
 	void startGameTimer();
 	void writeTimestamp(Packet& packet);
 	std::chrono::minutes getTimeLimit() const;
-	void endGame(int winner);
 	uint32_t getDeadPlayers() const;
+	void resetGame();
+	void resetMatch();
 
 	struct State
 	{
@@ -287,13 +299,13 @@ private:
 			MapInfoStarted = 4,
 			MapInfoSent = 5,
 			GameEnd = 6,
-			SettleDeadBits = 7,
 			CompletedDeadBits = 8,
 		};
 		Status status = None;
-		CompactUser positions[4];
+		std::array<CompactUser, 4> positions;
 		uint32_t cmd1Timestamp = 0;
 		std::array<bool, 4> dead {};
+		uint8_t endOfGameMask = 0;
 	};
 	std::array<State, 8> states;
 	std::vector<int> slots;	// slots used by each player
@@ -302,11 +314,11 @@ private:
 	std::array<uint8_t, 9> rules {};
 	uint16_t ruleSetter = 0; // client ID of the room owner with msb set (8000)
 	bool inGame = false;
-	bool gameEnded = false;
 	std::array<PowerUp, 28> powerUps;
 	std::array<uint8_t, 16> brickMap;
 	std::array<Bomb, 24> bombs;
 	int bombsPerPlayer = 1;
+	int gameNumber = 0;
 };
 
 class BombermanServer : public LobbyServer
