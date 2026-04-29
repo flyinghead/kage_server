@@ -141,7 +141,29 @@ struct CompactUser
 struct PowerUp
 {
 	Position pos;
-	uint16_t param;
+	union {
+		uint16_t param;
+		struct {
+			uint16_t unk1:4;
+			uint16_t unk2:4;
+			uint16_t slot:4;
+			uint16_t state:4;
+		};
+	};
+
+	enum State {
+		Gone = 0,
+		Hidden = 1,
+		Appearing = 2,
+		Visible = 3,
+		Expired = 4,
+		Acquired = 5,
+		Unknown6 = 6,
+		Unknown9 = 9,
+		Claimed = 0xb,
+		Granted = 0xe,
+		Random = 0xf,
+	};
 
 	PowerUp() {
 		param = 0;
@@ -241,6 +263,7 @@ public:
 	void makeCmd1Packet(Player *player, Packet& packet);
 	void makeCmd2Packet(Packet& packet);
 	void makeCmd3Packet(Packet& packet);
+	void checkEndOfGame(Player *player);
 
 private:
 	void updateSlots();
@@ -263,8 +286,9 @@ private:
 			RulesAccepted = 3,
 			MapInfoStarted = 4,
 			MapInfoSent = 5,
-			SettleDeadBits = 6,
-			CompletedDeadBits = 7,
+			GameEnd = 6,
+			SettleDeadBits = 7,
+			CompletedDeadBits = 8,
 		};
 		Status status = None;
 		CompactUser positions[4];
