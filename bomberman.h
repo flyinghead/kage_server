@@ -162,10 +162,10 @@ struct PowerUp
 		Visible = 3,
 		Expired = 4,
 		Acquired = 5,
-		Unknown6 = 6,
-		Unknown9 = 9,	// Granted -> 9 (hyp mode, one occurrence)
+		//Denied = 6,		// ?
+		Unknown9 = 9,	// Granted -> 9 (hyp mode, few occurrences)
 		Claimed = 0xb,
-		Consumed = 0xd,	// ???
+		Released = 0xd,
 		Granted = 0xe,
 		Random = 0xf,
 	};
@@ -274,7 +274,7 @@ public:
 	void makeCmd1Packet(Player *player, Packet& packet);
 	void makeCmd2Packet(Packet& packet);
 	void makeCmd3Packet(Packet& packet);
-	bool checkEndOfGame(Player *player, uint8_t command);
+	bool checkEndOfGame(Player *player, uint8_t command, uint8_t marker);
 	void sendEndOfGame(Player *player, Packet& packet);
 
 private:
@@ -283,7 +283,6 @@ private:
 	void broadcastKeyholder() const;
 	void broadcastReadySlotMask() const;
 	void writePlayersPos(Packet& packet);
-	void startGameTimer();
 	void writeTimestamp(Packet& packet);
 	std::chrono::minutes getTimeLimit() const;
 	uint32_t getDeadPlayers() const;
@@ -298,7 +297,7 @@ private:
 			InRoom = 2,
 			RulesAccepted = 3,
 			MapInfoStarted = 4,
-			MapInfoSent = 5,
+			InGame = 5,
 			GameEnd = 6,
 			CompletedDeadBits = 8,
 		};
@@ -311,7 +310,6 @@ private:
 	std::array<State, 8> states;
 	std::vector<int> slots;	// slots used by each player
 	asio::steady_timer timer;
-	asio::steady_timer gameTimer;
 	std::array<uint8_t, 9> rules {};
 	uint16_t ruleSetter = 0; // client ID of the room owner with msb set (8000)
 	bool inGame = false;
@@ -320,6 +318,8 @@ private:
 	std::array<Bomb, 24> bombs;
 	int bombsPerPlayer = 1;
 	int gameNumber = 0;
+
+	static constexpr uint8_t EOG_MARK = 0x14;
 };
 
 class BombermanServer : public LobbyServer

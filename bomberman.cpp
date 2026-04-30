@@ -24,7 +24,7 @@
 using namespace std::chrono_literals;
 
 BMRoom::BMRoom(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attributes, Player *owner, asio::io_context& io_context)
-	: Room(lobby, id, name, attributes, owner, io_context), timer(io_context), gameTimer(io_context)
+	: Room(lobby, id, name, attributes, owner, io_context), timer(io_context)
 {
 	// needed after the owner is added in the parent constructor
 	updateSlots();
@@ -353,10 +353,10 @@ void BMRoom::playerInGame(Player *player)
 	int idx = getPlayerIndex(player);
 	if (idx >= 0)
 	{
-		states[idx].status = State::MapInfoSent;
+		states[idx].status = State::InGame;
 		inGame = true;
 		for (unsigned i = 0; i < players.size(); i++)
-			inGame = inGame && (states[i].status == State::MapInfoSent);
+			inGame = inGame && (states[i].status == State::InGame);
 		if (inGame)
 		{
 			DEBUG_LOG(Game::Bomberman, "%s: all MapInfo sent. sending game time info", player->getName().c_str());
@@ -372,7 +372,6 @@ void BMRoom::playerInGame(Player *player)
 			packet.writeData(60u * 60u * (unsigned)getTimeLimit().count());
 			packet.writeData(0u);
 			Player::sendToAll(packet, players);
-			startGameTimer();
 		}
 	}
 }
@@ -429,6 +428,14 @@ void BMRoom::savePlayerCoords(Player *player, const uint8_t *data)
 // cmd2
 void BMRoom::savePowerUps(Player *player, const uint8_t *data)
 {
+	// States marked like (this) are set by the server
+	// Appearing sequence:
+	//   hidden -> appearing -> visible
+	// Successful pick up
+	//   claimed -> (granted) -> acquired
+	// TODO: Denied pick up
+	// Hyper bomber death sequence:
+	//   acquired -> released (with coords, unk1=1) -> (random) -> appearing -> visible
 	for (unsigned i = 0; i < powerUps.size(); i++)
 	{
 		PowerUp pup(data + i * sizeof(pup));
@@ -442,13 +449,17 @@ void BMRoom::savePowerUps(Player *player, const uint8_t *data)
 			if (pup.state == PowerUp::Visible) {
 				powerUps[i] = pup;
 			}
-			else if (pup.state == PowerUp::Claimed) {
+			else if (pup.state == PowerUp::Claimed)
+			{
+				// TODO wait and arbitrate
 				pup.state = PowerUp::Granted;
 				powerUps[i] = pup;
 			}
 			break;
 		case PowerUp::Visible:
-			if (pup.state == PowerUp::Claimed) {
+			if (pup.state == PowerUp::Claimed)
+			{
+				// TODO wait and arbitrate
 				pup.state = PowerUp::Granted;
 				powerUps[i] = pup;
 			}
@@ -466,19 +477,24 @@ void BMRoom::savePowerUps(Player *player, const uint8_t *data)
 				powerUps[i] = pup;
 			}
 			break;
-		case PowerUp::Acquired:
+		case PowerUp::Acquired:	// Picked up by a player
 			// Only transitions to 0 (or 4?) should be allowed? And only by the item owner
 			if (pup.state == PowerUp::Gone && pup.slot == powerUps[i].slot)
 				powerUps[i] = pup;
-			if (pup.state == PowerUp::Consumed && pup.slot == powerUps[i].slot)
-				// transition to consumed?
+			if (pup.state == PowerUp::Released && pup.slot == powerUps[i].slot)
+			{
+				// item has been released to a random location. Make it visible
+				pup.state = PowerUp::Random;
 				powerUps[i] = pup;
-			else if (pup.state != PowerUp::Acquired && pup.slot == powerUps[i].slot)
+				DEBUG_LOG(Game::Bomberman, "PowerUp Acquired -> Released (Random). Slot %d coords %d %d", pup.slot, pup.pos.x, pup.pos.y);
+			}
+			else if (pup.state != PowerUp::Acquired && pup.slot == powerUps[i].slot) {
 				WARN_LOG(Game::Bomberman, "PowerUp transitioning from acquired to %x? by slot %d, owner %d",
 						pup.state, pup.slot, powerUps[i].slot);
+			}
 			break;
 
-		case PowerUp::Granted:
+		case PowerUp::Granted: // Granted to a player by the server
 			if (pup.state == PowerUp::Acquired && pup.slot == powerUps[i].slot)
 				powerUps[i] = pup;
 			else if (pup.state != powerUps[i].state
@@ -488,15 +504,27 @@ void BMRoom::savePowerUps(Player *player, const uint8_t *data)
 				WARN_LOG(Game::Bomberman, "PowerUp current state not handled: Granted -> %x", pup.state);
 			break;
 
-		case PowerUp::Consumed:
-			if (pup.state == PowerUp::Random && pup.slot == powerUps[i].slot) {
-				// TODO choose random coords?
+		case PowerUp::Released: // Released by a dead player in hyper bomber mode
+			if (pup.state == PowerUp::Random && pup.slot == powerUps[i].slot)
+			{
+				// TODO Can this happen now? Can't find any occurrence
 				powerUps[i] = pup;
-				DEBUG_LOG(Game::Bomberman, "PowerUp Consumed -> Random. coords %d %d", pup.pos.x, pup.pos.y);
+				DEBUG_LOG(Game::Bomberman, "PowerUp Released -> Random. coords %d %d", pup.pos.x, pup.pos.y);
+			}
+			else if (pup.state == PowerUp::Acquired) {
+				powerUps[i] = pup;
+				DEBUG_LOG(Game::Bomberman, "PowerUp Released -> Acquired. Slot %d coords %d %d", pup.slot, pup.pos.x, pup.pos.y);
 			}
 			else if (pup.state != powerUps[i].state && pup.slot == powerUps[i].slot)
-				// TODO Consumed -> 5 after blowing self in hyp mode
-				WARN_LOG(Game::Bomberman, "PowerUp current state not handled: Consumed -> %x", pup.state);
+				WARN_LOG(Game::Bomberman, "PowerUp current state not handled: Released -> %x", pup.state);
+			break;
+
+		case PowerUp::Random:
+			if ((pup.state == PowerUp::Appearing || pup.state == PowerUp::Visible)
+					&& pup.slot == powerUps[i].slot)
+				powerUps[i] = pup;
+			else if (pup.state != powerUps[i].state && pup.slot == powerUps[i].slot)
+				WARN_LOG(Game::Bomberman, "PowerUp current state not handled: Random -> %x", pup.state);
 			break;
 
 		default:
@@ -560,6 +588,7 @@ void BMRoom::writePlayersPos(Packet& packet)
 	for (int i = pos + slots; i < 8; i++)
 		memset(packet.advance(sizeof(CompactUser)), 0, sizeof(CompactUser));
 }
+
 void BMRoom::writeTimestamp(Packet& packet)
 {
 	uint32_t latest = 0;
@@ -573,7 +602,7 @@ void BMRoom::makeCmd1Packet(Player *player, Packet& packet)
 	packet.init(Packet::REQ_CHAT);
 	BMCmd cmd { BMCmd::BOMB_DATA, 0xC8 };
 	packet.writeData(cmd.full);
-	packet.writeData((uint16_t)0);	// client id? mask?
+	packet.writeData((uint16_t)(inGame ? 0 : EOG_MARK));
 	writePlayersPos(packet);
 	writeTimestamp(packet);
 	for (const Bomb& bomb : bombs)
@@ -586,7 +615,7 @@ void BMRoom::makeCmd2Packet(Packet& packet)
 	packet.init(Packet::REQ_CHAT);
 	BMCmd cmd { BMCmd::MAP_DATA, 0xA4 };
 	packet.writeData(cmd.full);
-	packet.writeData((uint16_t)0);	// client id? mask?
+	packet.writeData((uint16_t)(inGame ? 0 : EOG_MARK));
 	writePlayersPos(packet);
 	for (const PowerUp& pup : powerUps)
 		pup.writeTo(packet.advance(sizeof(PowerUp)));
@@ -598,32 +627,12 @@ void BMRoom::makeCmd3Packet(Packet& packet)
 	packet.init(Packet::REQ_CHAT);
 	BMCmd cmd { BMCmd::POS_DATA, 0x3C };
 	packet.writeData(cmd.full);
-	packet.writeData((uint16_t)0);	// client id? mask?
+	packet.writeData((uint16_t)(inGame ? 0 : EOG_MARK));
 	writePlayersPos(packet);
 }
 
 std::chrono::minutes BMRoom::getTimeLimit() const {
 	return std::chrono::minutes(rules[3] + 1);
-}
-
-void BMRoom::startGameTimer()
-{
-	// Adding 2 sec to avoid ending the game before the game timer reaches 0
-	gameTimer.expires_after(getTimeLimit() + 2s);
-	gameTimer.async_wait([this](const std::error_code& ec) {
-		if (ec)
-			return;
-		INFO_LOG(Game::Bomberman, "Game end: time limit");
-		for (Player *player : players)
-		{
-			// force ending
-			states[getPlayerIndex(player)].endOfGameMask = 7;
-			Packet packet;
-			sendEndOfGame(player, packet);
-			if (!packet.empty())
-				player->send(packet);
-		}
-	});
 }
 
 void BMRoom::saveMapInfo(Player *player, const uint8_t *data, bool last)
@@ -640,49 +649,16 @@ void BMRoom::saveMapInfo(Player *player, const uint8_t *data, bool last)
 	DEBUG_LOG(Game::Bomberman, "%d bomb(s) per player", bombsPerPlayer);
 }
 
-bool BMRoom::checkEndOfGame(Player *player, uint8_t command)
+bool BMRoom::checkEndOfGame(Player *player, uint8_t command, uint8_t mark)
 {
-	State& playerState = states[getPlayerIndex(player)];
-	if (playerState.status != State::MapInfoSent)
+	if (mark != EOG_MARK)
 		return false;
-	const int mask = 1 << (command - 1);
-	if (rules[0] == 0)
-	{
-		// Survival mode
-		// Check if more than 1 player is alive
-		int alivePlayers = 0;
-		for (unsigned pl = 0; pl < players.size() && alivePlayers <= 1; pl++)
-		{
-			const int slots = getSlotCount(players[pl]);
-			const State& state = states[pl];
-			for (int slot = 0; slot < slots && alivePlayers <= 1; slot++)
-				if (!state.dead[slot])
-					alivePlayers++;
-		}
-		if (alivePlayers <= 1) {
-			INFO_LOG(Game::Bomberman, "Game end: %d player remaining", alivePlayers);
-			playerState.endOfGameMask |= mask;
-			return playerState.endOfGameMask == 7;
-		}
-	}
-	else
-	{
-		// Hyper-bomber mode
-		for (unsigned pl = 0; pl < players.size(); pl++)
-		{
-			const int slots = getSlotCount(players[pl]);
-			const State& state = states[pl];
-			for (int slot = 0; slot < slots; slot++)
-				// 80 appears briefly when a player respawns: ignore this case
-				if (state.positions[slot].unk == 0x80 && !state.dead[slot])
-				{
-					INFO_LOG(Game::Bomberman, "Game end: player %d won", getPlayerPosition(players[pl]) + slot);
-					playerState.endOfGameMask |= mask;
-					return playerState.endOfGameMask == 7;
-				}
-		}
-	}
-	return false;
+	State& playerState = states[getPlayerIndex(player)];
+	if (playerState.status != State::InGame)
+		return false;
+	INFO_LOG(Game::Bomberman, "[%s] Game end", player->getName().c_str());
+	playerState.endOfGameMask |= 1 << (command - 1);
+	return playerState.endOfGameMask == 7;
 }
 
 void BMRoom::sendEndOfGame(Player *player, Packet& packet)
@@ -765,7 +741,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 				room->saveBombState(player, data + 0x38);
 				room->saveBrickMap(player, data + 0xC8);
 				room->makeCmd1Packet(player, replyPacket);
-				if (room->checkEndOfGame(player, BMCmd::BOMB_DATA))
+				if (room->checkEndOfGame(player, BMCmd::BOMB_DATA, data[0x13]))
 				{
 					player->send(replyPacket);
 					replyPacket.reset();
@@ -795,7 +771,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			room->savePowerUps(player, data + 0x34);
 			room->saveBrickMap(player, data + 0xA4);
 			room->makeCmd2Packet(replyPacket);
-			if (room->checkEndOfGame(player, BMCmd::MAP_DATA))
+			if (room->checkEndOfGame(player, BMCmd::MAP_DATA, data[0x13]))
 			{
 				player->send(replyPacket);
 				replyPacket.reset();
@@ -814,7 +790,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			}
 			room->savePlayerCoords(player, data + 0x14);
 			room->makeCmd3Packet(replyPacket);
-			if (room->checkEndOfGame(player, BMCmd::POS_DATA))
+			if (room->checkEndOfGame(player, BMCmd::POS_DATA, data[0x13]))
 			{
 				player->send(replyPacket);
 				replyPacket.reset();
@@ -1033,8 +1009,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 		replyPacket.init(Packet::REQ_CHAT);
 		replyPacket.writeData(cmd.full);
 		replyPacket.writeData((uint16_t)data[0x12]); // Client ID
-		replyPacket.writeData(0x10000000u);	// LE int. ping value? only lsbyte used. 1,4,10,80,c8 is red
-		replyPacket.writeData(room->getSlotMask(player));
+		replyPacket.writeData(data + 0x14, 5);
 		break;
 
 	default:
