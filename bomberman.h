@@ -163,8 +163,9 @@ struct PowerUp
 		Expired = 4,
 		Acquired = 5,
 		Unknown6 = 6,
-		Unknown9 = 9,
+		Unknown9 = 9,	// Granted -> 9 (hyp mode, one occurrence)
 		Claimed = 0xb,
+		Consumed = 0xd,	// ???
 		Granted = 0xe,
 		Random = 0xf,
 	};

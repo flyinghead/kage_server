@@ -28,8 +28,7 @@ BMRoom::BMRoom(Lobby& lobby, uint32_t id, const std::string& name, uint32_t attr
 {
 	// needed after the owner is added in the parent constructor
 	updateSlots();
-	// TODO add resetRoom()
-	brickMap.fill(0xff);
+	resetMatch();
 }
 
 void BMRoom::addPlayer(Player *player) {
@@ -39,12 +38,14 @@ void BMRoom::addPlayer(Player *player) {
 
 bool BMRoom::removePlayer(Player *player)
 {
-	bool wasOwner = player == owner;
+	const bool wasOwner = player == owner;
+	const int idx = getPlayerIndex(player);
 	bool b = Room::removePlayer(player);
 	if (!b)
 	{
-		// TODO need to update states
 		updateSlots();
+		for (unsigned i = idx; i < players.size() - 1; i++)
+			states[i] = states[i + 1];
 		for (Player *pl : players)
 		{
 			Packet packet;
@@ -378,10 +379,10 @@ void BMRoom::playerInGame(Player *player)
 
 uint32_t BMRoom::getDeadPlayers() const
 {
+	uint32_t mask = (1 << getPlayerCount()) - 1;
 	if (rules[0] == 0)
 	{
 		// Survival mode
-		uint32_t mask = 0xff;
 		int i = 0;
 		for (unsigned pl = 0; pl < players.size(); pl++)
 		{
@@ -390,7 +391,6 @@ uint32_t BMRoom::getDeadPlayers() const
 				if (!states[pl].dead[slot])
 					mask &= ~(1 << i);
 		}
-		return mask;
 	}
 	else
 	{
@@ -400,11 +400,13 @@ uint32_t BMRoom::getDeadPlayers() const
 		{
 			const int slots = getSlotCount(players[pl]);
 			for (int slot = 0; slot < slots; slot++, i++)
-				if (states[pl].positions[slot].unk == 0x80)
-					return 0xff & ~(1 << i);
+				if (states[pl].positions[slot].unk == 0x80 && !states[pl].dead[slot]) {
+					mask &= ~(1 << i);
+					break;
+				}
 		}
-		return 0xff;
 	}
+	return mask;
 }
 
 void BMRoom::savePlayerCoords(Player *player, const uint8_t *data)
@@ -415,16 +417,18 @@ void BMRoom::savePlayerCoords(Player *player, const uint8_t *data)
 	{
 		State& state = states[getPlayerIndex(player)];
 		state.positions[i].readFrom(data + sizeof(CompactUser) * (pos + i));
-		if (rules[0] == 0 && state.positions[i].unk == 4 && !state.dead[i])
-			// Survival mode
+		if (state.positions[i].unk == 4 && !state.dead[i])
+			// Player is dead
 			state.dead[i] = true;
+		else if (state.positions[i].unk == 0 && state.dead[i])
+			// Player has respawned (hyper bomber mode)
+			state.dead[i] = false;
 	}
 }
 
 // cmd2
 void BMRoom::savePowerUps(Player *player, const uint8_t *data)
 {
-	// FIXME how to know which record is authoritative
 	for (unsigned i = 0; i < powerUps.size(); i++)
 	{
 		PowerUp pup(data + i * sizeof(pup));
@@ -466,7 +470,10 @@ void BMRoom::savePowerUps(Player *player, const uint8_t *data)
 			// Only transitions to 0 (or 4?) should be allowed? And only by the item owner
 			if (pup.state == PowerUp::Gone && pup.slot == powerUps[i].slot)
 				powerUps[i] = pup;
-			else if (pup.state != PowerUp::Acquired)
+			if (pup.state == PowerUp::Consumed && pup.slot == powerUps[i].slot)
+				// transition to consumed?
+				powerUps[i] = pup;
+			else if (pup.state != PowerUp::Acquired && pup.slot == powerUps[i].slot)
 				WARN_LOG(Game::Bomberman, "PowerUp transitioning from acquired to %x? by slot %d, owner %d",
 						pup.state, pup.slot, powerUps[i].slot);
 			break;
@@ -474,8 +481,22 @@ void BMRoom::savePowerUps(Player *player, const uint8_t *data)
 		case PowerUp::Granted:
 			if (pup.state == PowerUp::Acquired && pup.slot == powerUps[i].slot)
 				powerUps[i] = pup;
-			else if (pup.slot == powerUps[i].slot)
+			else if (pup.state != powerUps[i].state
+					&& pup.state != PowerUp::Visible
+					&& pup.state != PowerUp::Claimed
+					&& pup.slot == powerUps[i].slot)
 				WARN_LOG(Game::Bomberman, "PowerUp current state not handled: Granted -> %x", pup.state);
+			break;
+
+		case PowerUp::Consumed:
+			if (pup.state == PowerUp::Random && pup.slot == powerUps[i].slot) {
+				// TODO choose random coords?
+				powerUps[i] = pup;
+				DEBUG_LOG(Game::Bomberman, "PowerUp Consumed -> Random. coords %d %d", pup.pos.x, pup.pos.y);
+			}
+			else if (pup.state != powerUps[i].state && pup.slot == powerUps[i].slot)
+				// TODO Consumed -> 5 after blowing self in hyp mode
+				WARN_LOG(Game::Bomberman, "PowerUp current state not handled: Consumed -> %x", pup.state);
 			break;
 
 		default:
@@ -652,7 +673,9 @@ bool BMRoom::checkEndOfGame(Player *player, uint8_t command)
 			const int slots = getSlotCount(players[pl]);
 			const State& state = states[pl];
 			for (int slot = 0; slot < slots; slot++)
-				if (state.positions[slot].unk == 0x80) {
+				// 80 appears briefly when a player respawns: ignore this case
+				if (state.positions[slot].unk == 0x80 && !state.dead[slot])
+				{
 					INFO_LOG(Game::Bomberman, "Game end: player %d won", getPlayerPosition(players[pl]) + slot);
 					playerState.endOfGameMask |= mask;
 					return playerState.endOfGameMask == 7;
@@ -694,7 +717,7 @@ void BMRoom::resetGame()
 		// we don't reset the status since it should be correct
 	}
 	powerUps.fill({});
-	brickMap.fill(0);
+	brickMap.fill(0xff);
 	bombs.fill({});
 }
 
@@ -932,24 +955,31 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			break;
 
 		case BMCmd::END_BATTLE:	// battle has ended, returning to game room
-			// Only received when match is over. Next message is room unlock if owner.
-			// a8 14 00 11 00 00 10 02 00 00 00 10 00 00 00 00 ................
-			// 26 00 80 00                                     &...
-			DEBUG_LOG(Game::Bomberman, "%s: END BATTLE cmd=13", player->getName().c_str());
-			//replyPacket.init(Packet::REQ_NOP);
-			//room->sendRules(replyPacket);
-			//room->broadcastReadySlotMask();
 			{
-				//player->send(replyPacket);
-				//replyPacket.reset();
-				// this avoids the disconnection error of the room owner, but doesn't help with the freeze
-				BMCmd cmd { 0x15, 0 }; // abort game play?
-				replyPacket.init(Packet::REQ_CHAT);
+				// Only received when match is over. Next message is room unlock if owner.
+				// a8 14 00 11 00 00 10 02 00 00 00 10 00 00 00 00 ................
+				// 26 00 80 00                                     &...
+				DEBUG_LOG(Game::Bomberman, "%s: END BATTLE cmd=13", player->getName().c_str());
+				replyPacket.init(Packet::REQ_QRY_USERS);
+				replyPacket.writeData(0u);
+				replyPacket.writeData(0u);
+				const std::vector<Player *>& players = room->getPlayers();
+				replyPacket.writeData((uint32_t)players.size());
+				for (Player *pl : players)
+				{
+					replyPacket.writeData(pl->getName().c_str(), 0x10);
+					replyPacket.writeData(pl->getId());
+					const auto& extra = pl->getExtraData();
+					replyPacket.writeData((uint32_t)extra.size());
+					replyPacket.writeData(extra.data(), extra.size());
+				}
+				player->send(replyPacket);
+				replyPacket.reset();
+
+				replyPacket.init(Packet::REQ_NOP);
 				player->ackPacket(replyPacket, data);
-				replyPacket.writeData(cmd.full);
-				replyPacket.writeData((uint16_t)0);
+				break;
 			}
-			break;
 
 		case BMCmd::MAP_INFO: // SendGameMapBlock: Send MapInfo
 			DEBUG_LOG(Game::Bomberman, "%s: SendGameMapBlock 1A", player->getName().c_str());
