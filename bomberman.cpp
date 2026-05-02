@@ -64,8 +64,7 @@ uint32_t BMRoom::getPlayerCount() const {
 
 void BMRoom::sendRosterList(Packet& packet)
 {
-	BMCmd cmd {};
-	cmd.command = BMCmd::ROSTER_LIST;
+	BMCmd cmd { BMCmd::ROSTER_LIST, 0 };
 	packet.init(Packet::REQ_CHAT);
 	packet.flags |= Packet::FLAG_RUDP;
 	packet.writeData(cmd.full);
@@ -84,20 +83,34 @@ void BMRoom::sendRosterList(Packet& packet)
 	}
 }
 
+void BMRoom::makeRoomJoin(Packet& packet, const Player *player)
+{
+	BMCmd cmd{};
+	cmd.command = BMCmd::ROOM_JOIN;
+	packet.init(Packet::REQ_CHAT);
+	packet.flags |= Packet::FLAG_RUDP;
+	packet.writeData(cmd.full);
+	packet.writeData((uint16_t)0);			// flag?
+	packet.writeData(player->getId());		// player kage id [914]
+	packet.writeData((uint32_t)getPlayerIndex(player));		// FIXME [915] [0-F]? client id?
+	uint32_t pos = (uint32_t)getPlayerPosition(player);
+	packet.writeData(pos); 					// player pos [916]
+	uint32_t slots = getSlotCount(player);
+	packet.writeData(slots - 1);				// guest count [911]
+	packet.writeData(owner->getId());		// room owner kage id [912]
+	packet.writeData((uint32_t)getPlayerPosition(owner)); // room owner player pos [913]
+	// for each guest: -1 or guest pos (1 - 7)
+	for (unsigned i = 0; i < slots; i++)
+		packet.writeData(++pos);
+}
+
 // owner: needs ROOM_JOIN only at creation
 //        needs ROSTER_LIST when player joins
 // joiner: needs ROOM_JOIN
 //         and send ROSTER_LIST to all
 void BMRoom::createJoinRoomReply(Packet& reply, Packet& relay, Player *player)
 {
-	player->send(reply);
-	reply.reset();
-
 	Room::createJoinRoomReply(reply, relay, player);
-	reply.init(Packet::REQ_CHG_ROOM_ATTR);
-	reply.writeData(id);
-	reply.writeData("USER", 4);
-	reply.writeData(getPlayerCount());
 
 	relay.init(Packet::REQ_CHG_ROOM_ATTR);
 	relay.writeData(id);
@@ -119,24 +132,7 @@ void BMRoom::createJoinRoomReply(Packet& reply, Packet& relay, Player *player)
 		states[playerIndex].status = State::InRoom;
 	}
 
-	BMCmd cmd{};
-	cmd.command = BMCmd::ROOM_JOIN;
-	reply.init(Packet::REQ_CHAT);
-	reply.flags |= Packet::FLAG_RUDP;
-	reply.writeData(cmd.full);
-	reply.writeData((uint16_t)0);			// flag?
-	reply.writeData(player->getId());		// player kage id [914]
-	reply.writeData((uint32_t)getPlayerIndex(player));		// FIXME [915] [0-F]? client id?
-	uint32_t pos = (uint32_t)getPlayerPosition(player);
-	reply.writeData(pos); 					// player pos [916]
-	uint32_t slots = getSlotCount(player);
-	reply.writeData(slots - 1);				// guest count [911]
-	reply.writeData(owner->getId());		// room owner kage id [912]
-	reply.writeData((uint32_t)getPlayerPosition(owner)); // room owner player pos [913]
-	// for each guest: -1 or guest pos (1 - 7)
-	for (unsigned i = 1; i < slots; i++)
-		reply.writeData(++pos);
-
+	makeRoomJoin(reply, player);
 	player->send(reply);
 	reply.reset();
 
@@ -205,6 +201,7 @@ void BMRoom::broadcastReadySlotMask() const
 
 void BMRoom::sendGameStarting(Packet& packet, uint16_t clientId)
 {
+	gameStarting = true;
 	BMCmd cmd {};
 	cmd.command = BMCmd::GAME_STARTING;
 	cmd.size = 4;
@@ -232,24 +229,6 @@ void BMRoom::rudpAcked(Player *player)
 		return;
 	}
 	else if (states[i].status == State::GameEnd)
-//	{
-//		DEBUG_LOG(Game::Bomberman, "[%s] BMRoom::rudpAcked (end 1)", player->getName().c_str());
-//		states[i].status = State::SettleDeadBits;
-//		for (unsigned j = 0; j < players.size(); j++)
-//			if (states[j].status != State::SettleDeadBits)
-//				return;
-//		for (auto& player : players)
-//			player->notifyRoomOnAck();
-//		BMCmd cmd { BMCmd::CMPL_DEAD_BITS, 4 };	// completed dead bits
-//		Packet packet;
-//		packet.init(Packet::REQ_CHAT);
-//		packet.flags |= Packet::FLAG_RUDP;
-//		packet.writeData(cmd.full);
-//		packet.writeData((uint16_t)0);
-//		packet.writeData(getDeadPlayers());
-//		Player::sendToAll(packet, players);
-//	}
-//	else if (states[i].status == State::SettleDeadBits)
 	{
 		DEBUG_LOG(Game::Bomberman, "[%s] BMRoom::rudpAcked (end 2)", player->getName().c_str());
 		states[i].status = State::CompletedDeadBits;
@@ -268,23 +247,6 @@ void BMRoom::rudpAcked(Player *player)
 			else
 				resetMatch();
 		}
-		// FIXME BMCmd::END_GAME makes the room owner disconnect the line?
-		// 0x17 confuses the owner/winner
-		// same for roster list
-		/*
-		BMCmd cmd { 0x17, 0 };
-		Packet packet;
-		packet.init(Packet::REQ_CHAT);
-		packet.flags |= Packet::FLAG_RUDP;
-		packet.writeData(cmd.full);
-		packet.writeData((uint16_t)0);
-		player->send(packet);
-		*/
-		/*
-		Packet packet;
-		sendRules(packet);
-		player->send(packet);
-		*/
 	}
 }
 
@@ -315,9 +277,8 @@ void BMRoom::updateSlots()
 	}
 }
 
-void BMRoom::setRules(const uint8_t *p, uint16_t ruleSetter)
+void BMRoom::setRules(const uint8_t *p)
 {
-	this->ruleSetter = ruleSetter;
 	memcpy(rules.data(), p, rules.size());
 	for (State& state : states)
 		if (state.status == State::RulesAccepted)
@@ -336,7 +297,7 @@ void BMRoom::agreeRules(Player *player)
 
 void BMRoom::sendRules(Packet& packet)
 {
-	if (ruleSetter == 0)
+	if (rules[8] == 0)
 		// rules not set
 		return;
 	BMCmd cmd {};
@@ -344,7 +305,7 @@ void BMRoom::sendRules(Packet& packet)
 	packet.init(Packet::REQ_CHAT);
 	packet.flags |= Packet::FLAG_RUDP;
 	packet.writeData(cmd.full);
-	packet.writeData(ruleSetter);
+	packet.writeData((uint16_t)0);
 	packet.writeData(rules.data(), rules.size());
 }
 
@@ -355,15 +316,14 @@ void BMRoom::playerInGame(Player *player)
 	{
 		states[idx].status = State::InGame;
 		inGame = true;
+		gameStarting = false;
 		for (unsigned i = 0; i < players.size(); i++)
 			inGame = inGame && (states[i].status == State::InGame);
 		if (inGame)
 		{
 			DEBUG_LOG(Game::Bomberman, "%s: all MapInfo sent. sending game time info", player->getName().c_str());
 			Packet packet;
-			BMCmd cmd {};
-			cmd.command = BMCmd::TIME_INFO;
-			cmd.size = 12;
+			BMCmd cmd { BMCmd::TIME_INFO, 12 };
 			packet.init(Packet::REQ_CHAT);
 			packet.flags |= Packet::FLAG_RUDP;
 			packet.writeData(cmd.full);
@@ -669,6 +629,7 @@ void BMRoom::sendEndOfGame(Player *player, Packet& packet)
 	if (state.endOfGameMask != 7)
 		return;
 	state.status = State::GameEnd;
+	inGame = false;
 	player->notifyRoomOnAck();
 	BMCmd cmd { BMCmd::CMPL_DEAD_BITS, 4 };
 	if (gameNumber < rules[2] - 1)
@@ -683,6 +644,7 @@ void BMRoom::sendEndOfGame(Player *player, Packet& packet)
 void BMRoom::resetGame()
 {
 	inGame = false;
+	gameStarting = false;
 	for (unsigned i = 0; i < players.size(); i++)
 	{
 		State& state = states[i];
@@ -700,6 +662,13 @@ void BMRoom::resetGame()
 void BMRoom::resetMatch() {
 	resetGame();
 	gameNumber = 0;
+}
+
+void BMRoom::endBattle(Player *player)
+{
+	int idx = getPlayerIndex(player);
+	if (idx >= 0)
+		states[idx].status = State::RulesAccepted;
 }
 
 BombermanServer::BombermanServer(uint16_t port, asio::io_context& io_context)
@@ -806,9 +775,12 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			// non owner:
 			// 60 14 00 11 00 00 10 02 00 00 00 04 00 00 00 07 `...............
 			// 08 00 08 00                                     ....
+			/*
 			relayPacket.init(Packet::REQ_CHAT);
 			relayPacket.relay(player->getId());
 			relayPacket.writeData(&data[0x10], (int)(len - 0x10));
+			*/
+			// Likely expects an initial timer value as payload
 			break;
 
 		case BMCmd::NEXT_TIMER:		// CalcTimer_Next
@@ -821,9 +793,21 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			// 0a 04 08 00 00 00 00 18                          ........
 			//             timer
 			//                      29
+			// FIXME ***Relaying these packet makes the game freeze at EoB***
+			/*
 			relayPacket.init(Packet::REQ_CHAT);
 			relayPacket.relay(player->getId());
 			relayPacket.writeData(&data[0x10], (int)(len - 0x10));
+			*/
+			// send every 500 ms (if not answered) timer value increases by 0x11
+			// ~ 29.4 ms/tick
+			{
+				BMCmd cmd { BMCmd::NEXT_TIMER, 4 };
+				replyPacket.init(Packet::REQ_CHAT);
+				replyPacket.writeData(cmd.full);
+				replyPacket.writeData((uint16_t)0);
+				replyPacket.writeData(0u);	// should be between -1 and 1
+			}
 			break;
 
 		case BMCmd::SET_RULES:		// Set game rules
@@ -835,7 +819,7 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 				player->send(replyPacket);
 				replyPacket.reset();
 
-				room->setRules(&data[0x14], clientId);
+				room->setRules(&data[0x14]);
 				room->sendRules(relayPacket);
 				room->sendRules(replyPacket); // important
 				break;
@@ -895,11 +879,12 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			//       clientID
 			replyPacket.init(Packet::REQ_NOP);
 			player->ackPacket(replyPacket, data);
-
+			/* FIXME This is very likely wrong since the game handler for D needs a payload
 			relayPacket.init(Packet::REQ_CHAT);
 			relayPacket.flags |= Packet::FLAG_RUDP;
 			relayPacket.relay(player->getId());
 			relayPacket.writeData(data + 0x10, len - 0x10);
+			*/
 			break;
 
 		case BMCmd::START_GAME:	// map info sent, ready to start sending game data
@@ -925,9 +910,6 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 			DEBUG_LOG(Game::Bomberman, "%s: END GAME cmd=10", player->getName().c_str());
 			replyPacket.init(Packet::REQ_NOP);
 			player->ackPacket(replyPacket, data);
-			// no effect room->broadcastReadySlotMask();
-			// sending rules or roster list doesn't help
-			// sending packet F, 10 or 17 doesn't work
 			break;
 
 		case BMCmd::END_BATTLE:	// battle has ended, returning to game room
@@ -936,21 +918,26 @@ bool BombermanServer::handlePacket(Player *player, const uint8_t *data, size_t l
 				// a8 14 00 11 00 00 10 02 00 00 00 10 00 00 00 00 ................
 				// 26 00 80 00                                     &...
 				DEBUG_LOG(Game::Bomberman, "%s: END BATTLE cmd=13", player->getName().c_str());
-				replyPacket.init(Packet::REQ_QRY_USERS);
-				replyPacket.writeData(0u);
-				replyPacket.writeData(0u);
-				const std::vector<Player *>& players = room->getPlayers();
-				replyPacket.writeData((uint32_t)players.size());
-				for (Player *pl : players)
+				if (player == room->getOwner())
 				{
-					replyPacket.writeData(pl->getName().c_str(), 0x10);
-					replyPacket.writeData(pl->getId());
-					const auto& extra = pl->getExtraData();
-					replyPacket.writeData((uint32_t)extra.size());
-					replyPacket.writeData(extra.data(), extra.size());
+					// Hack to avoid disconnection error by the room owner
+					replyPacket.init(Packet::REQ_QRY_USERS);
+					replyPacket.writeData(0u);
+					replyPacket.writeData(0u);
+					const std::vector<Player *>& players = room->getPlayers();
+					replyPacket.writeData((uint32_t)players.size());
+					for (Player *pl : players)
+					{
+						replyPacket.writeData(pl->getName().c_str(), 0x10);
+						replyPacket.writeData(pl->getId());
+						const auto& extra = pl->getExtraData();
+						replyPacket.writeData((uint32_t)extra.size());
+						replyPacket.writeData(extra.data(), extra.size());
+					}
+					player->send(replyPacket);
+					replyPacket.reset();
 				}
-				player->send(replyPacket);
-				replyPacket.reset();
+				room->endBattle(player);
 
 				replyPacket.init(Packet::REQ_NOP);
 				player->ackPacket(replyPacket, data);

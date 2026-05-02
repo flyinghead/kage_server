@@ -224,7 +224,7 @@ void LobbyServer::startTimer()
 				INFO_LOG(game, "Player %s has timed out", player->getName().c_str());
 				timeouts.push_back(player);
 			}
-			else if (player->getRoom() == nullptr && player->getLastTimeSeen() + 30s >= Clock::now())
+			else if (player->getRoom() == nullptr && player->getLastTimeSeen() + 30s <= Clock::now())
 			{
 				// Send a reliable NOP and expect an ack
 				Packet packet;
@@ -631,11 +631,6 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 				replyPacket.writeData(room->getId());
 				player->ackPacket(replyPacket, data);
 
-				replyPacket.init(Packet::REQ_CHG_ROOM_ATTR);
-				replyPacket.writeData(room->getId());
-				replyPacket.writeData("STAT", 4);
-				replyPacket.writeData(attributes);
-
 				room->createJoinRoomReply(replyPacket, relayPacket, player);	// FIXME separate lobby from room players
 			}
 			break;
@@ -805,6 +800,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 			uint32_t roomId = read32(data, 0x10);
 			uint32_t attr = read32(data, 0x14);
 			DEBUG_LOG(game, "REG_QRY_ROOM_ATTR %x %c%c%c%c", roomId, attr >> 24, (attr >> 16) & 0xff, (attr >> 8) & 0xff, attr & 0xff);
+			// TODO use roomId
 			Room *room = player->getRoom();
 			if (room == nullptr) {
 				replyPacket.respFailed(Packet::REQ_QRY_ROOM_ATTR);
@@ -882,7 +878,7 @@ void LobbyServer::handlePacket(const uint8_t *data, size_t len)
 					replyPacket.writeData(pl->getId());
 					replyPacket.writeData(pl->getLobby() != nullptr ? pl->getLobby()->getId() : 0u);
 					replyPacket.writeData(pl->getRoom() != nullptr ? pl->getRoom()->getId() : 0u);
-					const auto& extra = player->getExtraData();
+					const auto& extra = pl->getExtraData();
 					replyPacket.writeData((uint32_t)extra.size());
 					replyPacket.writeData(extra.data(), extra.size());
 					count++;

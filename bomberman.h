@@ -242,7 +242,7 @@ public:
 	void createJoinRoomReply(Packet& reply, Packet& relay, Player *player) override;
 	void rudpAcked(Player *player) override;
 	void agreeRules(Player *player);
-	void setRules(const uint8_t *p, uint16_t rulesWord);
+	void setRules(const uint8_t *p);
 	void sendRules(Packet& packet);
 	void sendGameStarting(Packet& packet, uint16_t clientId);
 	void playerInGame(Player *player);
@@ -276,6 +276,8 @@ public:
 	void makeCmd3Packet(Packet& packet);
 	bool checkEndOfGame(Player *player, uint8_t command, uint8_t marker);
 	void sendEndOfGame(Player *player, Packet& packet);
+	void endBattle(Player *player);
+	void makeRoomJoin(Packet& packet, const Player *player);
 
 private:
 	void updateSlots();
@@ -311,8 +313,8 @@ private:
 	std::vector<int> slots;	// slots used by each player
 	asio::steady_timer timer;
 	std::array<uint8_t, 9> rules {};
-	uint16_t ruleSetter = 0; // client ID of the room owner with msb set (8000)
 	bool inGame = false;
+	bool gameStarting = false;
 	std::array<PowerUp, 28> powerUps;
 	std::array<uint8_t, 16> brickMap;
 	std::array<Bomb, 24> bombs;
